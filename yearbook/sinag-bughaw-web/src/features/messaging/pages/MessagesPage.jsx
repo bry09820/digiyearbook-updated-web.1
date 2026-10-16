@@ -74,7 +74,110 @@ function Avatar({ src, name, size = 'h-11 w-11', radius = 'rounded-xl' }) {
 
 function OnlineDot({ online }) {
   return (
-    <span className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+    <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white ${online ? 'bg-[#31a24c]' : 'bg-slate-300'}`} />
+  );
+}
+
+const CHAT_THEMES = {
+  messenger: { label: 'Messenger blue', bubble: 'bg-[#0084ff] text-white', swatch: 'bg-[#0084ff]' },
+  navy: { label: 'Yearbook navy', bubble: 'bg-[#1d2b4b] text-white', swatch: 'bg-[#1d2b4b]' },
+  gold: { label: 'Sinag gold', bubble: 'bg-[#fdb813] text-[#1d2b4b]', swatch: 'bg-[#fdb813]' },
+};
+
+function ChatInfoPanel({ recipient, online, thread, theme, muted, onTheme, onMute, onClose }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const media = thread.filter((msg) => msg.image_url || msg.image_path);
+
+  return (
+    <div className="flex h-full w-[320px] flex-col bg-white">
+      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <p className="m-0 text-sm font-black text-[#1d2b4b]">Chat info</p>
+        <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full border-0 bg-slate-100 text-slate-500" aria-label="Close chat info">
+          <i className="fas fa-times text-xs" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+        <div className="flex flex-col items-center text-center">
+          <Avatar src={recipient?.profile_picture} name={recipient?.name} size="h-20 w-20" radius="rounded-full" />
+          <p className="mb-0 mt-3 text-lg font-black text-[#1d2b4b]">{recipient?.name || 'Student'}</p>
+          <p className="m-0 text-xs font-semibold text-slate-400">
+            {online ? 'Active now' : (recipient?.course || 'Offline')}
+          </p>
+          {recipient?.id && (
+            <Link to={`/students/${recipient.id}`} className="mt-3 text-xs font-bold text-[#0084ff] no-underline hover:underline">
+              View profile
+            </Link>
+          )}
+        </div>
+
+        <div className="mt-5 flex items-start gap-3 rounded-2xl bg-slate-100 px-3 py-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-[#1d2b4b]">
+            <i className="fas fa-lock text-xs" />
+          </span>
+          <div>
+            <p className="m-0 text-xs font-black text-[#1d2b4b]">Private conversation</p>
+            <p className="m-0 mt-1 text-[11px] leading-relaxed text-slate-500">
+              Only you and {recipient?.name?.split(' ')[0] || 'this person'} can open this chat. Yearbook messages are not end-to-end encrypted.
+            </p>
+          </div>
+        </div>
+
+        <div className="relative mt-4">
+          <button
+            type="button"
+            onClick={() => setOptionsOpen((open) => !open)}
+            className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left"
+          >
+            <span className="text-sm font-bold text-[#1d2b4b]">Customize chat</span>
+            <i className={`fas fa-chevron-${optionsOpen ? 'up' : 'down'} text-xs text-slate-400`} />
+          </button>
+          {optionsOpen && (
+            <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+              <p className="m-0 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">Bubble color</p>
+              {Object.entries(CHAT_THEMES).map(([id, item]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onTheme(id)}
+                  className="flex w-full items-center gap-2 rounded-xl border-0 bg-white px-2 py-2 text-left text-sm font-semibold text-[#1d2b4b] hover:bg-slate-50"
+                >
+                  <span className={`h-4 w-4 rounded-full ${item.swatch}`} />
+                  {item.label}
+                  {theme === id && <i className="fas fa-check ml-auto text-xs text-[#0084ff]" />}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={onMute}
+                className="flex w-full items-center gap-2 rounded-xl border-0 bg-white px-2 py-2 text-left text-sm font-semibold text-[#1d2b4b] hover:bg-slate-50"
+              >
+                <i className={`fas ${muted ? 'fa-bell' : 'fa-bell-slash'} text-xs text-slate-400`} />
+                {muted ? 'Unmute conversation' : 'Mute conversation'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="m-0 text-sm font-black text-[#1d2b4b]">Media & files</p>
+            <span className="text-[11px] font-bold text-slate-400">{media.length}</span>
+          </div>
+          {media.length === 0 ? (
+            <p className="m-0 rounded-2xl bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">No photos shared in this chat yet.</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-1.5">
+              {media.map((msg) => (
+                <a key={msg.id} href={imageUrl(msg.image_url || msg.image_path)} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg">
+                  <img src={imageUrl(msg.image_url || msg.image_path)} alt="Shared in chat" className="aspect-square w-full object-cover" />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -100,6 +203,10 @@ export default function MessagesPage() {
   const [findLoading, setFindLoading] = useState(false);
   const [findError, setFindError] = useState('');
   const [startingId, setStartingId] = useState(null);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [theme, setTheme] = useState('messenger');
+  const [muted, setMuted] = useState(false);
   const bottomRef = useRef();
   const threadRef = useRef(null);
   const stickToBottomRef = useRef(true);
@@ -135,6 +242,30 @@ export default function MessagesPage() {
   }, [imagePreview]);
 
   useEffect(() => () => clearTimeout(findTimerRef.current), []);
+
+  useEffect(() => {
+    if (!recipientId) {
+      setInfoOpen(false);
+      return;
+    }
+    setTheme(localStorage.getItem(`sb-chat-theme-${recipientId}`) || 'messenger');
+    setMuted(localStorage.getItem(`sb-chat-muted-${recipientId}`) === '1');
+    setInfoOpen(false);
+    setAttachOpen(false);
+  }, [recipientId]);
+
+  const chooseTheme = (next) => {
+    setTheme(next);
+    if (recipientId) localStorage.setItem(`sb-chat-theme-${recipientId}`, next);
+  };
+
+  const toggleMute = () => {
+    setMuted((current) => {
+      const next = !current;
+      if (recipientId) localStorage.setItem(`sb-chat-muted-${recipientId}`, next ? '1' : '0');
+      return next;
+    });
+  };
 
   const runFindSearch = useCallback(async (query) => {
     const q = query.trim();
@@ -229,16 +360,15 @@ export default function MessagesPage() {
   let lastDayLabel = null;
 
   return (
-    <div className="flex h-screen flex-col bg-[#eef2f8]">
+    <div className="flex h-dvh max-w-[100vw] flex-col overflow-hidden bg-[#eef2f8]">
       <Navbar unreadMessageCount={unreadTotal} />
 
-      <main className="mx-auto grid min-h-0 w-full max-w-[1320px] flex-1 grid-cols-1 overflow-hidden bg-white shadow-sm lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className={`${recipientId ? 'hidden lg:flex' : 'flex'} min-h-0 flex-col border-r border-slate-200 bg-white`}>
-          <div className="border-b border-slate-100 p-4">
+      <main className="mx-auto grid min-h-0 w-full max-w-[1440px] flex-1 grid-cols-1 overflow-hidden bg-white lg:grid-cols-[340px_minmax(0,1fr)]">
+        <aside className={`${recipientId ? 'hidden lg:flex' : 'flex'} min-h-0 flex-col border-r border-[#e4e6eb] bg-white`}>
+          <div className="px-4 pb-2 pt-4">
             <div className="mb-3 flex items-center justify-between">
-              <h1 className="m-0 flex items-center gap-2 text-base font-black text-[#1d2b4b]">
-                <span className="h-2 w-2 rounded-full bg-[#fdb813]" />
-                Messages
+              <h1 className="m-0 text-[22px] font-black tracking-tight text-[#050505]">
+                Chats
               </h1>
               {unreadTotal > 0 && (
                 <span className="rounded-full bg-[#fdb813] px-2 py-0.5 text-[11px] font-black text-[#1d2b4b]">
@@ -260,7 +390,7 @@ export default function MessagesPage() {
                 {findLoading && <i className="fas fa-spinner fa-spin text-xs text-slate-400" />}
               </label>
             ) : (
-              <label className="flex h-10 items-center gap-2 rounded-xl border border-transparent bg-slate-100 px-3 text-slate-400 transition focus-within:border-[#fdb813] focus-within:bg-white">
+              <label className="flex h-9 items-center gap-2 rounded-full bg-[#f0f2f5] px-3 text-slate-500">
                 <i className="fas fa-search text-xs" />
                 <input
                   value={search}
@@ -330,15 +460,15 @@ export default function MessagesPage() {
                     <Link
                       key={conv.id}
                       to={`/messages/${other.id}`}
-                      className={`flex items-center gap-3 border-b border-slate-100 px-4 py-3 no-underline transition ${active ? 'border-l-4 border-l-[#fdb813] bg-amber-50' : 'border-l-4 border-l-transparent hover:bg-slate-50'}`}
+                      className={`mx-2 flex items-center gap-3 rounded-xl px-2 py-2.5 no-underline transition ${active ? 'bg-[#e7f3ff]' : 'hover:bg-[#f0f2f5]'}`}
                     >
                       <div className="relative">
-                        <Avatar src={other.profile_picture} name={other.name} />
+                        <Avatar src={other.profile_picture} name={other.name} radius="rounded-full" />
                         <OnlineDot online={online} />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className={`m-0 truncate text-sm text-[#1d2b4b] ${unread ? 'font-black' : 'font-bold'}`}>{other.name}</p>
-                        <p className={`m-0 truncate text-xs ${unread ? 'font-bold text-[#1d2b4b]' : 'text-slate-400'}`}>{conv.body || (conv.image_url ? 'Sent an image' : '')}</p>
+                        <p className={`m-0 truncate text-[15px] text-[#050505] ${unread ? 'font-black' : 'font-semibold'}`}>{other.name}</p>
+                        <p className={`m-0 truncate text-[13px] ${unread ? 'font-bold text-[#050505]' : 'text-[#65676b]'}`}>{conv.body || (conv.image_url ? 'Sent a photo' : '')}</p>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         <span className="text-[11px] text-slate-400">{formatTime(conv.created_at)}</span>
@@ -369,10 +499,11 @@ export default function MessagesPage() {
           </div>
         </aside>
 
-        <section className={`${recipientId ? 'flex' : 'hidden lg:flex'} min-h-0 flex-col bg-[#f4f7fe]`}>
+        <section className={`${recipientId ? 'flex' : 'hidden lg:flex'} relative min-h-0 bg-white`}>
           {recipientId ? (
             <>
-              <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex items-center gap-3 border-b border-[#e4e6eb] bg-white px-3 py-2.5">
                 <button
                   type="button"
                   onClick={() => navigate('/messages')}
@@ -384,15 +515,24 @@ export default function MessagesPage() {
                 {recipient ? (
                   <>
                     <div className="relative">
-                      <Avatar src={recipient.profile_picture} name={recipient.name} size="h-10 w-10" radius="rounded-xl" />
+                      <Avatar src={recipient.profile_picture} name={recipient.name} size="h-10 w-10" radius="rounded-full" />
                       <OnlineDot online={onlineUsers.has(recipient.id)} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="m-0 truncate text-sm font-black text-[#1d2b4b]">{recipient.name}</p>
-                      <p className={`m-0 text-xs font-semibold ${onlineUsers.has(recipient.id) ? 'text-emerald-600' : 'text-slate-400'}`}>
-                        {isTyping ? 'Typing…' : (onlineUsers.has(recipient.id) ? 'Online' : (recipient.course ?? 'Offline'))}
+                      <p className="m-0 truncate text-[15px] font-bold text-[#050505]">{recipient.name}</p>
+                      <p className={`m-0 text-xs font-semibold ${onlineUsers.has(recipient.id) ? 'text-[#31a24c]' : 'text-[#65676b]'}`}>
+                        {muted ? 'Muted · ' : ''}{isTyping ? 'Typing…' : (onlineUsers.has(recipient.id) ? 'Active now' : 'Offline')}
                       </p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setInfoOpen((open) => !open)}
+                      aria-pressed={infoOpen}
+                      aria-label="Chat info"
+                      className={`grid h-9 w-9 place-items-center rounded-full border-0 ${infoOpen ? 'bg-[#e7f3ff] text-[#0084ff]' : 'bg-transparent text-[#0084ff] hover:bg-[#f0f2f5]'}`}
+                    >
+                      <i className="fas fa-info-circle" />
+                    </button>
                   </>
                 ) : (
                   <div className="min-w-0 flex-1">
@@ -408,7 +548,7 @@ export default function MessagesPage() {
                   if (!list) return;
                   stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 64;
                 }}
-                className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
+                className="min-h-0 flex-1 overflow-y-auto bg-white px-3 py-4"
               >
                 {loading && thread.length === 0 && <LoadingSkeleton variant="row" count={5} gridClassName="space-y-3" />}
 
@@ -442,7 +582,7 @@ export default function MessagesPage() {
                           </div>
                         )}
                         <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[min(78%,520px)] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${mine ? 'rounded-br-md bg-[#1d2b4b] text-white' : 'rounded-bl-md border border-slate-200 bg-white text-[#1d2b4b]'}`}>
+                          <div className={`max-w-[min(75%,480px)] px-3 py-2 text-[15px] leading-snug ${mine ? `rounded-[18px] rounded-br-[4px] ${CHAT_THEMES[theme]?.bubble || CHAT_THEMES.messenger.bubble}` : 'rounded-[18px] rounded-bl-[4px] bg-[#f0f2f5] text-[#050505]'}`}>
                             {msgImage && (
                               <img
                                 src={imageUrl(msgImage)}
@@ -451,7 +591,7 @@ export default function MessagesPage() {
                               />
                             )}
                             {msg.body && <p className="m-0 whitespace-pre-wrap">{msg.body}</p>}
-                            <div className={`mt-1 text-[10px] ${mine ? 'text-white/45' : 'text-slate-400'}`}>
+                            <div className={`mt-1 text-[10px] ${mine ? 'text-white/70' : 'text-[#65676b]'}`}>
                               {formatTime(msg.created_at)}
                               {mine && msg.is_read && <span className="ml-1 text-[#fdb813]">Seen</span>}
                             </div>
@@ -463,7 +603,7 @@ export default function MessagesPage() {
 
                   {isTyping && (
                     <div className="flex justify-start">
-                      <div className="flex gap-1 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3">
+                      <div className="flex gap-1 rounded-[18px] rounded-bl-[4px] bg-[#f0f2f5] px-4 py-3">
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300" />
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300 [animation-delay:150ms]" />
                         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300 [animation-delay:300ms]" />
@@ -474,7 +614,7 @@ export default function MessagesPage() {
                 </div>
               </div>
 
-              <form onSubmit={handleSend} className="relative border-t border-slate-200 bg-white p-3">
+              <form onSubmit={handleSend} className="relative border-t border-[#e4e6eb] bg-white px-3 py-2.5">
                 {showEmoji && (
                   <div className="absolute bottom-[76px] left-3 z-10 grid grid-cols-6 gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                     {QUICK_EMOJIS.map((emoji) => (
@@ -501,21 +641,34 @@ export default function MessagesPage() {
                     </button>
                   </div>
                 )}
-                <div className="flex items-center gap-3">
+                <div className="flex items-end gap-2">
                   <input ref={fileRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                  <button
-                    type="button"
-                    onClick={() => fileRef.current?.click()}
-                    className="grid h-11 w-11 place-items-center rounded-xl border border-slate-200 bg-white text-[#1d2b4b] transition hover:border-[#fdb813]"
-                    aria-label="Attach image"
-                  >
-                    <i className="far fa-image" />
-                  </button>
-                  <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-transparent bg-slate-100 px-3 transition focus-within:border-[#fdb813] focus-within:bg-white">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setAttachOpen((open) => !open)}
+                      className="grid h-9 w-9 place-items-center rounded-full border-0 bg-transparent text-[#0084ff] hover:bg-[#f0f2f5]"
+                      aria-label="Attachment options"
+                    >
+                      <i className="fas fa-plus-circle text-lg" />
+                    </button>
+                    {attachOpen && (
+                      <div className="absolute bottom-11 left-0 z-10 w-44 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                        <button
+                          type="button"
+                          onClick={() => { setAttachOpen(false); fileRef.current?.click(); }}
+                          className="flex w-full items-center gap-2 rounded-xl border-0 bg-white px-2 py-2 text-left text-sm font-semibold text-[#050505] hover:bg-[#f0f2f5]"
+                        >
+                          <i className="far fa-image text-[#0084ff]" /> Photo
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex min-h-9 flex-1 items-center gap-1 rounded-full bg-[#f0f2f5] px-2">
                     <button
                       type="button"
                       onClick={() => setShowEmoji((value) => !value)}
-                      className="grid h-8 w-8 place-items-center rounded-lg border-0 bg-transparent text-slate-400 transition hover:bg-white hover:text-[#1d2b4b]"
+                      className="grid h-8 w-8 place-items-center rounded-full border-0 bg-transparent text-[#0084ff]"
                       aria-label="Add emoji"
                     >
                       <i className="far fa-smile" />
@@ -524,19 +677,37 @@ export default function MessagesPage() {
                       value={body}
                       onChange={(e) => setBody(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder="Type a message..."
-                      className="w-full border-0 bg-transparent text-sm text-[#1d2b4b] outline-none placeholder:text-slate-400"
+                      placeholder="Aa"
+                      className="w-full border-0 bg-transparent py-2 text-sm text-[#050505] outline-none placeholder:text-slate-400"
                     />
                   </div>
                   <button
                     type="submit"
                     disabled={!body.trim() && !image}
-                    className="grid h-11 w-11 place-items-center rounded-xl border-0 bg-[#fdb813] text-[#1d2b4b] transition hover:bg-amber-400 disabled:bg-slate-200 disabled:text-slate-400"
+                    className="grid h-9 w-9 place-items-center rounded-full border-0 bg-transparent text-[#0084ff] disabled:text-slate-300"
+                    aria-label="Send"
                   >
                     <i className="fas fa-paper-plane" />
                   </button>
                 </div>
               </form>
+              </div>
+              <aside
+                className={`min-w-0 shrink-0 overflow-hidden border-[#e4e6eb] bg-white transition-[width] duration-300 ease-out ${infoOpen ? 'w-[320px] border-l' : 'w-0'} max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-30 max-lg:shadow-2xl ${infoOpen ? 'max-lg:w-[min(100%,320px)]' : 'max-lg:w-0'}`}
+              >
+                {recipient && (
+                  <ChatInfoPanel
+                    recipient={recipient}
+                    online={onlineUsers.has(recipient.id)}
+                    thread={thread}
+                    theme={theme}
+                    muted={muted}
+                    onTheme={chooseTheme}
+                    onMute={toggleMute}
+                    onClose={() => setInfoOpen(false)}
+                  />
+                )}
+              </aside>
             </>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">

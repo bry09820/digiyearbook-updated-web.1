@@ -22,7 +22,7 @@ class BatchSectionController extends Controller
     // GET /api/admin/academics/directory
     public function directory(): JsonResponse
     {
-        $grouped = $this->batches->getBatchesByDepartment();
+        $grouped = $this->batches->getBatchesByDepartment(false);
         $stats = $this->batches->departmentStats();
         $totals = $this->batches->directoryTotals();
 
@@ -131,9 +131,7 @@ class BatchSectionController extends Controller
             ->orderBy('name')
             ->get()
             ->each(function (Batch $batch) use ($people) {
-                $batch->students_count = $people->filter(
-                    fn (array $person) => (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
-                )->count();
+                $batch->students_count = $this->batches->countRegisteredForBatch($people, $batch);
             });
 
         return response()->json([
@@ -148,9 +146,7 @@ class BatchSectionController extends Controller
         $people = $this->batches->registeredAccounts();
         $batch->load('sections');
         $batch->loadCount('sections');
-        $batch->students_count = $people->filter(
-            fn (array $person) => (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
-        )->count();
+        $batch->students_count = $this->batches->countRegisteredForBatch($people, $batch);
 
         return response()->json(['data' => $batch]);
     }

@@ -23,7 +23,6 @@ export function useMessaging(recipientId = null) {
   const didInitialLoadRef = useRef(false);
   recipientRef.current = recipientId;
   const threadRef       = useRef([]);
-  const loadedRecipientRef = useRef(null);
   const skeletonUsedRef = useRef(false);
   threadRef.current = thread;
 

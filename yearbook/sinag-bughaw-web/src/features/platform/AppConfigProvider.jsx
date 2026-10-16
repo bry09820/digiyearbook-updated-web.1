@@ -112,10 +112,10 @@ export function AppConfigProvider({ children }) {
     };
   }, [refresh]);
 
-  const isOn = useCallback(
-    (featureKey) => Boolean(config.features?.[featureKey]),
-    [config]
-  );
+  const isOn = useCallback((featureKey) => {
+    const value = config.features?.[featureKey] ?? config[featureKey];
+    return value === true || value === 1 || value === '1';
+  }, [config]);
 
   const value = useMemo(
     () => ({ config, loading, refresh, isOn }),

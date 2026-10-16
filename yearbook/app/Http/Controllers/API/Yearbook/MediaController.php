@@ -19,8 +19,6 @@ use App\Models\Subscription;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Support\Facades\Log;
-
 class MediaController extends Controller
 {
     public function __construct(
@@ -175,13 +173,6 @@ class MediaController extends Controller
         if ($media) {
             $gallery = $media->gallery;
 
-            Log::info('deletePhoto (GalleryMedia) debug', [
-                'auth_user_id'    => Auth::id(),
-                'gallery_user_id' => $gallery?->user_id,
-                'media_id'        => $media->id,
-                'gallery_id'      => $gallery?->id,
-            ]);
-
             $actor = Auth::user();
 
             abort_unless(
@@ -218,13 +209,6 @@ class MediaController extends Controller
 
         // Fallback: legacy Photo model (old architecture rows still in DB)
         $photo = \App\Models\Photo::with('album')->findOrFail($id);
-
-        Log::info('deletePhoto (legacy Photo) debug', [
-            'auth_user_id'  => Auth::id(),
-            'photo_user_id' => $photo->user_id,
-            'album_user_id' => $photo->album?->user_id,
-            'photo_id'      => $photo->id,
-        ]);
 
         Gate::authorize('delete', $photo);
 

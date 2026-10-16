@@ -432,13 +432,13 @@ class BatchService
     }
 
     // Batch Helpers 
-    public function getBatchesByDepartment(): Collection
+    public function getBatchesByDepartment(bool $campusYearsOnly = true): Collection
     {
         $people = $this->registeredAccounts();
         $batches = Batch::with([
             'sections:id,batch_id,name,course,department,batch_year',
         ])
-            ->campusYears()
+            ->when($campusYearsOnly, fn ($query) => $query->campusYears())
             ->orderBy('graduation_year', 'desc')
             ->get();
 
@@ -480,16 +480,56 @@ class BatchService
                         'course' => $section->course,
                         'department' => $section->department,
                         'batch_year' => $section->batch_year,
-                        'students_count' => $people->filter(function (array $person) use ($batch, $department, $section) {
-                        return (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
-                            && strcasecmp((string) $person['department'], (string) $department) === 0
-                            && $this->sameCourse($person['course'] ?? null, $section->course);
-                    })->count(),
+                        'students_count' => $people->filter(
+                            fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                        )->count(),
                     'students' => $people
                             ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id)
                             ->values()
                             ->all(),
                     ])->values()->all(),
+                ]);
+            }
+        }
+
+        if (! $campusYearsOnly) {
+            $listedIds = $grouped
+                ->flatMap(fn (array $batch) => collect($batch['sections'])->pluck('id'))
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+            $missing = Section::query()
+                ->when($listedIds !== [], fn ($query) => $query->whereNotIn('id', $listedIds))
+                ->with('batch:id,name,course,course_code,graduation_year')
+                ->get();
+
+            foreach ($missing as $section) {
+                $department = trim((string) $section->department) ?: 'Unassigned';
+                $grouped->push([
+                    'id' => $section->batch_id,
+                    'name' => $section->batch?->name ?? 'Unassigned batch',
+                    'course' => $section->batch?->course ?? $section->course,
+                    'course_code' => $section->batch?->course_code,
+                    'graduation_year' => $section->batch?->graduation_year ?? $section->batch_year,
+                    'department' => $department,
+                    'students_count' => $people->filter(
+                        fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                    )->count(),
+                    'sections' => [[
+                        'id' => $section->id,
+                        'batch_id' => $section->batch_id,
+                        'name' => $section->name,
+                        'course' => $section->course,
+                        'department' => $section->department,
+                        'batch_year' => $section->batch_year,
+                        'students_count' => $people->filter(
+                            fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                        )->count(),
+                        'students' => $people
+                            ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id)
+                            ->values()
+                            ->all(),
+                    ]],
                 ]);
             }
         }
@@ -509,8 +549,7 @@ class BatchService
             ->leftJoin('students', 'users.student_record_id', '=', 'students.id')
             ->leftJoin('sections as student_sections', 'students.section_id', '=', 'student_sections.id')
             ->leftJoin('sections as user_sections', 'users.section_id', '=', 'user_sections.id')
-            ->whereIn('users.role', [User::ROLE_STUDENT, User::ROLE_ALUMNI])
-            ->whereNull('users.deleted_at')
+            ->whereIn('users.id', User::dashboardAccounts()->select('users.id'))
             ->select([
                 'users.id',
                 'users.first_name',
@@ -582,6 +621,23 @@ class BatchService
                 'profile_picture' => $row->profile_picture ?: $row->avatar ?: $row->photo,
             ];
         })->values();
+    }
+
+    public function countRegisteredForBatch(Collection $people, Batch $batch): int
+    {
+        $course = trim((string) ($batch->course ?? ''));
+
+        return $people->filter(function (array $person) use ($batch, $course) {
+            if ((int) ($person['graduation_year'] ?? 0) !== (int) $batch->graduation_year) {
+                return false;
+            }
+
+            if ($course === '') {
+                return true;
+            }
+
+            return $this->sameCourse($person['course'] ?? null, $course);
+        })->count();
     }
 
     public function directoryTotals(): array

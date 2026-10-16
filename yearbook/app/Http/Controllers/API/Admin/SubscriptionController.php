@@ -19,7 +19,7 @@ class SubscriptionController extends Controller
         return response()->json([
             'active_count'    => $tiers['premium_standard'] + $tiers['premium'],
             'total_users'     => $tiers['total_users'],
-            'cancelled_count' => Subscription::where('status', 'cancelled')->count(),
+            'cancelled_count' => Subscription::where('status', 'cancelled')->whereHas('user')->count(),
             'total_revenue'   => (clone $active)->sum('amount_paid'),
             'expiring_soon'   => (clone $active)
                 ->whereBetween('expires_at', [now(), now()->addDays(30)])
@@ -38,6 +38,7 @@ class SubscriptionController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Subscription::with('user:id,first_name,last_name,email')
+            ->whereHas('user')
             ->orderByDesc('created_at');
 
         if ($search = $request->get('search')) {

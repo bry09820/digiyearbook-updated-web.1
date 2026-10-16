@@ -44,19 +44,11 @@ class StudentController extends Controller
     // List 
     public function index(Request $request)
     {
-        $viewer    = $request->user();
-        $viewerKey = $viewer ? $viewer->id : 'guest';
-        $epoch     = (int) Cache::get('profile.visibility.epoch', 0);
+        $key = 'students.api.v4.' . md5(serialize($request->only(['section_id', 'course', 'q', 'page'])));
 
-        $key = 'students.api.v3.' . $epoch . '.' . $viewerKey . '.' . md5(serialize($request->only(['section_id', 'course', 'q', 'page'])));
-
-        return Cache::remember($key, 300, function () use ($request, $viewer) {
+        return Cache::remember($key, 300, function () use ($request) {
             return User::with(['section', 'studentRecord'])
-                ->whereIn('role', ['student', 'alumni'])
-                ->visibleTo($viewer)
-                ->when($viewer, fn($q) =>
-                    $q->whereKeyNot($viewer->id)
-                )
+                ->dashboardAccounts()
                 ->when($request->section_id, fn($q) =>
                     $q->where('section_id', $request->section_id)
                 )
@@ -126,6 +118,11 @@ class StudentController extends Controller
         if (! $student->canBeViewedBy($request->user())) {
             return response()->json($student->visibilityDenialPayload(), 403);
         }
+
+        $student->setAttribute(
+            'profile_views',
+            app(\App\Services\Analytics\EngagementAnalyticsService::class)->liveProfileViewCount($student->id)
+        );
 
         if ($isOwner) {
             return response()->json(array_merge(

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { recordContentView } from '@/api/analytics.api';
+import PostEngagement from '@/features/profile/components/PostEngagement';
 
-export default function PostLightbox({ post, initialIdx = 0, onClose, onViewCount }) {
+export default function PostLightbox({ post, initialIdx = 0, onClose, onViewCount, onEngagement }) {
   const [idx,    setIdx]    = useState(initialIdx);
   const [loaded, setLoaded] = useState(false);
   const [animIn, setAnimIn] = useState(false);
@@ -225,6 +226,10 @@ export default function PostLightbox({ post, initialIdx = 0, onClose, onViewCoun
                   </div>
                 </div>
               )}
+
+              <div className="mt-4 border-t border-[#efefef] pt-3">
+                <PostEngagement post={post} onChange={onEngagement} startOpen />
+              </div>
             </div>
           </div>
         </div>

@@ -15,6 +15,7 @@ use App\Models\TaggedPhoto;
 use App\Models\User;
 use App\Notifications\PhotoTaggedNotification;
 use App\Services\Storage\LocalStorageService;
+use App\Support\PostEngagementSummary;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -55,13 +56,19 @@ class ProfileController extends Controller
 
         $photos = Photo::where('user_id', $id)
             ->where('is_profile_post', true)
-            ->when(! $isOwner, fn ($q) => $q->where(function ($visibility) use ($isBatchmate) {
-                $visibility->where('visibility', 'public');
+            ->when(! $isOwner, fn ($q) => $q
+                ->where(function ($status) {
+                    $status->where('status', 'approved')->orWhereNull('status');
+                })
+                ->where(function ($visibility) use ($isBatchmate) {
+                    $visibility->where('visibility', 'public')
+                        ->orWhereNull('visibility')
+                        ->orWhere('visibility', '');
 
-                if ($isBatchmate) {
-                    $visibility->orWhere('visibility', 'friends');
-                }
-            }))
+                    if ($isBatchmate) {
+                        $visibility->orWhereIn('visibility', ['friends', 'batchmates']);
+                    }
+                }))
             ->with([
                 'user:id,name',
                 'user.studentRecord:id,course,photo',         
@@ -75,7 +82,13 @@ class ProfileController extends Controller
             ->latest()
             ->paginate(12);
 
-        $photos->getCollection()->transform(fn ($p) => $this->formatPost($p));
+        $summaries = PostEngagementSummary::forPhotoIds(
+            $photos->getCollection()->pluck('id')->all(),
+            Auth::id()
+        );
+        $photos->getCollection()->transform(
+            fn ($p) => $this->formatPost($p, $summaries[(int) $p->id] ?? null)
+        );
 
         return response()->json([
             'success'    => true,
@@ -324,7 +337,7 @@ class ProfileController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $this->formatPost($photo),
+            'data'    => $this->formatPost($photo, PostEngagementSummary::forPhoto($photo->id, Auth::id())),
         ]);
     }
 
@@ -494,7 +507,7 @@ class ProfileController extends Controller
     }
 
     // PRIVATE HELPERS
-    private function formatPost(Photo $photo): array
+    private function formatPost(Photo $photo, ?array $engagement = null): array
     {
         if (! array_key_exists('unique_views_count', $photo->getAttributes())) {
             $photo->loadCount('postViews as unique_views_count');
@@ -548,6 +561,8 @@ class ProfileController extends Controller
                 'profile_picture' => $u->profile_picture,
             ])->values(),
             'tagged_students' => $taggedStudents->values(),
+            'reactions'       => $engagement['reactions'] ?? PostEngagementSummary::blank()['reactions'],
+            'comments_count'  => $engagement['comments_count'] ?? 0,
         ];
     }
 

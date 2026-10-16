@@ -11,7 +11,7 @@ class EnsureFeatureEnabled
     /** @var array<string, string> */
     private const LABELS = [
         'allow_student_posts'             => 'Student posts',
-        'allow_comments'                  => 'Comments',
+        'allow_comments'                  => 'Commenting',
         'allow_reactions'                 => 'Reactions',
         'enable_flipbook_viewer'          => 'Flipbook viewer',
         'enable_yearbook_pdf_download'    => 'Yearbook PDF download',

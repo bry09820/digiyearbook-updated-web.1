@@ -31,6 +31,12 @@ class MediaModerationController extends Controller
             'user:id,first_name,last_name,profile_picture',
             'galleries' => fn ($q) => $q->with('media')
                                          ->whereNotNull('user_id')
+                                         ->where('status', 'approved')
+                                         ->where(function ($visibility) {
+                                             $visibility->where('visibility', 'public')
+                                                 ->orWhereNull('visibility')
+                                                 ->orWhere('visibility', '');
+                                         })
                                          ->orderBy('created_at', 'desc'),
         ])
         ->whereNotNull('user_id')
@@ -56,7 +62,6 @@ class MediaModerationController extends Controller
                 'status'           => $p->status,
                 'file_type'        => $this->mediaItemType($p),
                 'resource_type'    => $this->mediaItemType($p),
-                'ai_metadata'      => $p->ai_metadata,
                 'created_at'       => $p->created_at,
                 'created_at_human' => $p->created_at
                     ? Carbon::parse($p->created_at)->diffForHumans() : null,

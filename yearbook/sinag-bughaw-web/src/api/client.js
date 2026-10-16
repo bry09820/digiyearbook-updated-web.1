@@ -1,8 +1,15 @@
 import axios from 'axios';
 
-const BASE_URL         = import.meta.env.VITE_API_URL             || '/api';
 const STORAGE_ROOT     = import.meta.env.VITE_APP_URL             || 'http://127.0.0.1:8000';
-const FRONTEND_URL     = import.meta.env.VITE_FRONTEND_URL        || 'http://localhost:5173';
+
+function apiBaseUrl() {
+  if (typeof window !== 'undefined' && window.location.port === '8000') {
+    return '/api';
+  }
+  return import.meta.env.VITE_API_URL || '/api';
+}
+
+const BASE_URL = apiBaseUrl();
 const CLOUDINARY_CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
 
 export function storageUrl(path) {
@@ -45,16 +52,22 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    const requestUrl = String(err.config?.url ?? '');
+    const isAuthAttempt = /\/auth\/(login|register|otp|forgot-password|reset-password|face-login)/.test(requestUrl);
+
     if (err.response?.status === 503 && err.response?.data?.code === 'MAINTENANCE') {
       if (!window.location.pathname.startsWith('/maintenance')) {
-        window.location.href = `${FRONTEND_URL}/maintenance`;
+        window.location.assign('/maintenance');
       }
       return Promise.reject(err);
     }
-    if (err.response?.status === 401) {
+    const isViewPing = /\/analytics\/record-(view|content-view)/.test(requestUrl);
+    if (err.response?.status === 401 && !isAuthAttempt && !isViewPing) {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('sb_token');
-      window.location.href = `${FRONTEND_URL}/login`;
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login');
+      }
     }
     return Promise.reject(err);
   }

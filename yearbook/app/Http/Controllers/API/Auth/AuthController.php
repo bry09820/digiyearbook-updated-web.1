@@ -792,7 +792,6 @@ class AuthController extends Controller
         Log::info('OTP generated', [
             'email'      => $email,
             'type'       => $type,
-            'otp'        => $otp,
             'expires_at' => $expiresAt->toDateTimeString(),
         ]);
 
@@ -815,13 +814,10 @@ class AuthController extends Controller
         $expired = $record?->expires_at ? $record->expires_at->lt(now()) : true;
 
         Log::info('OTP verification attempt', [
-            'email'      => $email,
-            'type'       => $type,
-            'expected'   => $expectedCode,
-            'submitted'  => $submittedCode,
-            'expired'    => $record ? $expired : null,
-            'expires_at' => $record?->expires_at?->toDateTimeString(),
-            'record_id'  => $record?->id,
+            'email'     => $email,
+            'type'      => $type,
+            'expired'   => $record ? $expired : null,
+            'record_id' => $record?->id,
         ]);
 
         if (

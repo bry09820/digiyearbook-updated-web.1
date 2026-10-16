@@ -9,8 +9,18 @@ class AdminSeeder extends Seeder
 {
     public function run(): void
     {
-        $superPassword = (string) env('SEED_SUPERADMIN_PASSWORD', 'SuperAdmin@2025!');
-        $adminPassword = (string) env('SEED_ADMIN_PASSWORD', 'Admin@2025!');
+        $production = app()->environment('production');
+        $superPassword = env('SEED_SUPERADMIN_PASSWORD');
+        $adminPassword = env('SEED_ADMIN_PASSWORD');
+
+        if ($production && (! is_string($superPassword) || $superPassword === '' || ! is_string($adminPassword) || $adminPassword === '')) {
+            $this->command?->error('Set SEED_SUPERADMIN_PASSWORD and SEED_ADMIN_PASSWORD before seeding admin accounts in production.');
+
+            return;
+        }
+
+        $superPassword = (string) ($superPassword !== null && $superPassword !== '' ? $superPassword : 'SuperAdmin@2025!');
+        $adminPassword = (string) ($adminPassword !== null && $adminPassword !== '' ? $adminPassword : 'Admin@123!');
 
         $super = Admin::updateOrCreate(
             ['username' => 'superadmin'],
@@ -33,8 +43,6 @@ class AdminSeeder extends Seeder
             ]
         );
 
-        $this->command?->info('Admin accounts seeded (change passwords after first login):');
-        $this->command?->line('  superadmin  /  (SEED_SUPERADMIN_PASSWORD or SuperAdmin@2025!)');
-        $this->command?->line('  admin       /  (SEED_ADMIN_PASSWORD or Admin@2025!)');
+        $this->command?->info('Admin accounts seeded for superadmin and admin. Change those passwords after the first login.');
     }
 }

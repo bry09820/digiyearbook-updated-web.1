@@ -5,6 +5,7 @@ import Footer from '@/components/layout/Footer';
 import { studentsApi } from '@/api/student.api';
 import { profileApi } from '@/api/gallery.api';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { useAppConfig } from '@/features/platform/AppConfigProvider';
 import { useChatHeads } from '@/features/messaging/context/ChatHeadsContext';
 import ShareModal from '@/features/profile/components/ShareModal';
 import PremiumBadge from '@/features/subscription/components/PremiumBadge';
@@ -330,6 +331,7 @@ function RestrictedProfileView({ student, visibility, authUser, onBack, onLogin,
 export default function StudentProfileView() {
   const { id }             = useParams();
   const { user: authUser } = useAuth();
+  const { isOn } = useAppConfig();
   const { openChat }       = useChatHeads();
   const navigate           = useNavigate();
   const [searchParams]     = useSearchParams();
@@ -397,7 +399,13 @@ export default function StudentProfileView() {
         setRestrictedStudent(null);
         setVisibility(null);
         // id here is users.id correct for profile_views table
-        recordProfileView(parseInt(id));
+        recordProfileView(parseInt(id))
+          .then((result) => {
+            const views = Number(result?.profile_views);
+            if (!Number.isFinite(views)) return;
+            setStudent((current) => current ? { ...current, profile_views: views } : current);
+          })
+          .catch(() => {});
         trackProfileView({
           id:     parseInt(id),
           name:   payload.name   ?? '',
@@ -577,6 +585,18 @@ export default function StudentProfileView() {
           onClose={() => setLightbox(null)}
           onViewCount={(postId, viewsCount) => {
             setPosts(prev => prev.map(item => item.id === postId ? { ...item, views_count: viewsCount } : item));
+          }}
+          onEngagement={(postId, engagement) => {
+            setPosts(prev => prev.map(item => item.id === postId ? {
+              ...item,
+              reactions: engagement?.reactions ?? item.reactions,
+              comments_count: engagement?.comments_count ?? item.comments_count,
+            } : item));
+            setLightbox(current => current?.id === postId ? {
+              ...current,
+              reactions: engagement?.reactions ?? current.reactions,
+              comments_count: engagement?.comments_count ?? current.comments_count,
+            } : current);
           }}
         />
       )}
@@ -778,9 +798,20 @@ export default function StudentProfileView() {
                       : <img   src={post.file_path} alt={post.caption ?? ''} className="w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105" />
                     }
                     <div className="absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200 group-hover:opacity-100 flex items-center justify-center">
-                      <span className="text-white text-sm font-bold">
-                        <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
-                        {Number(post.views_count ?? post.views ?? 0).toLocaleString()}
+                      <span className="flex items-center justify-center gap-3 text-white text-sm font-bold">
+                        <span>
+                          <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
+                          {Number(post.views_count ?? post.views ?? 0).toLocaleString()}
+                        </span>
+                        {isOn('allow_reactions') && (
+                          <span>👍 {Number(post.reactions?.total ?? 0).toLocaleString()}</span>
+                        )}
+                        {isOn('allow_comments') && (
+                          <span>
+                            <i className="fas fa-comment text-[#fdb813] mr-1" aria-hidden="true" />
+                            {Number(post.comments_count ?? 0).toLocaleString()}
+                          </span>
+                        )}
                       </span>
                     </div>
                     <button

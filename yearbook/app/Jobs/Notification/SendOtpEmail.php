@@ -27,9 +27,6 @@ class SendOtpEmail implements ShouldQueue
     {
         Log::info("SendOtpEmail triggered for: {$this->email}");
 
-        // Always print the code so local/mobile testing works even if SMTP is down.
-        Log::info("OTP verification code for {$this->email}: {$this->otp}");
-
         $user = User::where('email', $this->email)->first();
         $name = $user?->name ?? $this->email;
 
@@ -37,7 +34,7 @@ class SendOtpEmail implements ShouldQueue
 
         if (! $sent) {
             // OTP is already stored in otp_verifications; keep registration usable.
-            Log::error("OTP email delivery failed for {$this->email} — code is still valid in DB/logs (attempt {$this->attempts()})");
+            Log::error("OTP email delivery failed for {$this->email} (attempt {$this->attempts()})");
             return;
         }
 

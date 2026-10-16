@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { studentsApi } from '@/api/student.api';
+import { recordProfileView } from '@/api/analytics.api';
 import { profileApi } from '@/api/gallery.api';
 import { storageUrl } from '@/api/client';
 import { useAuth } from '@/features/auth/hooks/useAuth';
@@ -279,9 +280,21 @@ export default function ProfilePage() {
     if (!profileId) return;
     setLoading(true);
     studentsApi.show(profileId)
-      .then(({ data }) => { setStudent(data); setBio(data.bio ?? ''); })
+      .then(({ data }) => {
+        setStudent(data);
+        setBio(data.bio ?? '');
+        if (authUser?.id && String(authUser.id) !== String(profileId)) {
+          recordProfileView(parseInt(profileId, 10))
+            .then((result) => {
+              const views = Number(result?.profile_views);
+              if (!Number.isFinite(views)) return;
+              setStudent((current) => current ? { ...current, profile_views: views } : current);
+            })
+            .catch(() => {});
+        }
+      })
       .finally(() => setLoading(false));
-  }, [profileId]);
+  }, [profileId, authUser?.id]);
 
   useEffect(() => { if (activeTab === 'posts')        loadPosts();        }, [activeTab, profileId]);
   useEffect(() => { if (activeTab === 'achievements') loadAchievements(); }, [activeTab, profileId]);
@@ -556,6 +569,21 @@ export default function ProfilePage() {
           onClose={() => setLightbox(null)}
           onViewCount={(postId, viewsCount) => {
             setPosts(prev => prev.map(item => item.id === postId ? { ...item, views_count: viewsCount } : item));
+          }}
+          onEngagement={(postId, engagement) => {
+            setPosts(prev => prev.map(item => item.id === postId ? {
+              ...item,
+              reactions: engagement?.reactions ?? item.reactions,
+              comments_count: engagement?.comments_count ?? item.comments_count,
+            } : item));
+            setLightbox(current => current?.post?.id === postId ? {
+              ...current,
+              post: {
+                ...current.post,
+                reactions: engagement?.reactions ?? current.post.reactions,
+                comments_count: engagement?.comments_count ?? current.post.comments_count,
+              },
+            } : current);
           }}
         />
       )}

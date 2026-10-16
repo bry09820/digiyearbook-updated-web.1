@@ -70,7 +70,8 @@ Route::post('/payments/webhook',    [PaymentController::class, 'webhook']);
 Route::post('/paymongo/webhook',    [PaymentController::class, 'webhook']);
 Route::get('/announcements',        [AnnouncementController::class, 'index']);
 Route::get('/analytics/top-viewed', [AnalyticsController::class,   'topViewed']);
-Route::post('/analytics/record-view/{userId}', [AnalyticsController::class, 'recordView']);
+Route::post('/analytics/record-view/{userId}', [AnalyticsController::class, 'recordView'])
+    ->middleware('throttle:30,1');
 
 // Faculty (public no login required)
 Route::prefix('faculty')->group(function () {
@@ -105,7 +106,14 @@ Route::middleware(['auth:sanctum', 'active.account', 'verified', 'throttle:120,1
 
     // Feed 
     Route::get('/feed', [FeedController::class, 'index']);
+    Route::get('/feed/engagement', [\App\Http\Controllers\API\Feed\PostEngagementController::class, 'summary']);
     Route::post('/feed/{photo}/view', [FeedController::class, 'recordView']);
+    Route::post('/feed/{photo}/reactions', [\App\Http\Controllers\API\Feed\PostEngagementController::class, 'react'])
+        ->middleware('feature:allow_reactions');
+    Route::get('/feed/{photo}/comments', [\App\Http\Controllers\API\Feed\PostEngagementController::class, 'comments']);
+    Route::post('/feed/{photo}/comments', [\App\Http\Controllers\API\Feed\PostEngagementController::class, 'storeComment'])
+        ->middleware('feature:allow_comments');
+    Route::delete('/feed/{photo}/comments/{comment}', [\App\Http\Controllers\API\Feed\PostEngagementController::class, 'destroyComment']);
 
     // Profile 
     Route::prefix('profile')->group(function () {

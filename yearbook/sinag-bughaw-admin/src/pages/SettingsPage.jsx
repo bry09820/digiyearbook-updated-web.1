@@ -342,7 +342,21 @@ export default function SettingsPage() {
 
   const set = (key, val) => setSettings((p) => ({ ...p, [key]: String(val) }));
   const bool = (key) => settings[key] === "1";
-  const toggleSetting = (key) => set(key, bool(key) ? "0" : "1");
+  const toggleSetting = async (key) => {
+    const next = bool(key) ? "0" : "1";
+    set(key, next);
+
+    const savesImmediately = ["allow_student_posts", "allow_comments", "allow_reactions"].includes(key);
+    if (!savesImmediately) return;
+
+    try {
+      await api.post("/admin/settings", { [key]: next });
+      toast(next === "1" ? "Turned on and saved." : "Turned off and saved.");
+    } catch (err) {
+      set(key, next === "1" ? "0" : "1");
+      toast(extractError(err), "error");
+    }
+  };
 
   const save = async (keys) => {
     setSaving(true);

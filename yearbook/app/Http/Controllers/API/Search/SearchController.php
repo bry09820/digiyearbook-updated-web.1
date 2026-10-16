@@ -44,7 +44,6 @@ class SearchController extends Controller
     {
         $query  = $request->get('q', '');
         $type   = $request->get('type', 'all');
-        $viewer = $request->user();
 
         if (strlen($query) < 2) {
             return response()->json(['results' => []]);
@@ -54,7 +53,7 @@ class SearchController extends Controller
 
         if (in_array($type, ['students', 'all'])) {
             $results['students'] = User::with(['studentRecord', 'section'])
-                ->whereIn('role', PlatformSettings::directoryRoles())
+                ->dashboardAccounts()
                 ->where(function ($q) use ($query) {
                     $q->where('name', 'like', "%{$query}%")
                       ->orWhere('email', 'like', "%{$query}%")
@@ -65,7 +64,6 @@ class SearchController extends Controller
                               ->orWhere('last_name', 'like', "%{$query}%");
                       });
                 })
-                ->visibleTo($viewer)
                 ->take(10)
                 ->get()
                 ->map(fn($u) => [
@@ -137,11 +135,9 @@ class SearchController extends Controller
             $builder->whereIn('role', PlatformSettings::directoryRoles());
 
             $paginator = $builder->paginate($perPage);
-            $viewer = request()->user();
 
             return response()->json([
                 'data' => collect($paginator->items())
-                            ->filter(fn (User $u) => $u->canBeViewedBy($viewer))
                             ->map(fn(User $u) => $this->formatStudent($u))
                             ->values(),
                 'meta' => [
@@ -172,8 +168,7 @@ class SearchController extends Controller
         int     $perPage
     ): JsonResponse {
         $builder = User::with(['section', 'studentRecord'])
-            ->whereIn('role', PlatformSettings::directoryRoles())
-            ->visibleTo(request()->user())
+            ->dashboardAccounts()
             ->when($query !== '', function ($q) use ($query) {
                 $q->where(function ($sub) use ($query) {
                     $sub->where('name', 'like', "%{$query}%")
@@ -233,8 +228,7 @@ class SearchController extends Controller
             }
         } catch (\Throwable) {
             $results = User::with('studentRecord')
-                ->whereIn('role', PlatformSettings::directoryRoles())
-                ->visibleTo($request->user())
+                ->dashboardAccounts()
                 ->where(function ($q) use ($query) {
                     $q->where('name', 'like', "%{$query}%")
                       ->orWhere('email', 'like', "%{$query}%")
@@ -246,11 +240,9 @@ class SearchController extends Controller
         }
 
         $results->loadMissing('studentRecord');
-        $viewer = $request->user();
 
         return response()->json([
             'suggestions' => $results
-                ->filter(fn (User $u) => $u->canBeViewedBy($viewer))
                 ->map(fn(User $u) => [
                 'id'                => $u->id,
                 'user_id'           => $u->id,
@@ -276,7 +268,7 @@ class SearchController extends Controller
             ->pluck('course');
 
         $userCourses = User::query()
-            ->whereIn('role', PlatformSettings::directoryRoles())
+            ->dashboardAccounts()
             ->whereNotNull('course')
             ->distinct()
             ->pluck('course');

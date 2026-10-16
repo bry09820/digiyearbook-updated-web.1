@@ -1,8 +1,12 @@
 import { useState } from 'react';
+import { useAppConfig } from '@/features/platform/AppConfigProvider';
 
 export default function PostCard({ post, onClick, isOwn, onMenuClick, onReportClick }) {
+  const { isOn } = useAppConfig();
   const [activeIdx, setActiveIdx] = useState(0);
   const viewsCount = Number(post.views_count ?? post.views ?? 0);
+  const reactionCount = Number(post.reactions?.total ?? 0);
+  const commentCount = Number(post.comments_count ?? 0);
 
   const media      = post.media ?? [];
   const mediaCount = media.length || 1;
@@ -65,9 +69,20 @@ export default function PostCard({ post, onClick, isOwn, onMenuClick, onReportCl
 
       <div className="post-overlay absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200
                       flex items-center justify-center z-[2]">
-        <span className="text-white text-sm font-bold">
-          <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
-          {Number.isFinite(viewsCount) ? viewsCount.toLocaleString() : '0'}
+        <span className="flex items-center justify-center gap-3 text-white text-sm font-bold">
+          <span>
+            <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
+            {Number.isFinite(viewsCount) ? viewsCount.toLocaleString() : '0'}
+          </span>
+          {isOn('allow_reactions') && (
+            <span>👍 {reactionCount.toLocaleString()}</span>
+          )}
+          {isOn('allow_comments') && (
+            <span>
+              <i className="fas fa-comment text-[#fdb813] mr-1" aria-hidden="true" />
+              {commentCount.toLocaleString()}
+            </span>
+          )}
         </span>
       </div>
 

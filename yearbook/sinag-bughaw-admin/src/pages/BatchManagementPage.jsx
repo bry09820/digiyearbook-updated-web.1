@@ -1194,7 +1194,7 @@ function SectionsView({ batch = null, toast, onSelect, onCount }) {
                         {course}
                       </div>
                       <div className="h-px min-w-[80px] flex-1 bg-slate-200" />
-                      {pill(`${[...new Map(courseGroups[course].map(section => [`${section.batch_record_id}-${section.course}`, Number(section.students_count ?? 0)])).values()].reduce((sum, count) => sum + count, 0)} students`, C.green, C.greenBg)}
+                      {pill(`${courseGroups[course].reduce((sum, section) => sum + Number(section.students_count ?? 0), 0)} students`, C.green, C.greenBg)}
                       {pill(`${courseGroups[course].length} sections`, color, bg)}
                     </div>
                     <CardGrid>
@@ -1214,6 +1214,7 @@ function SectionsView({ batch = null, toast, onSelect, onCount }) {
                     </div>
                     <div className="mb-2 text-xs text-slate-500">
                       {s.course}
+                      {` · ${Number(s.students_count ?? 0).toLocaleString()} students`}
                     </div>
                     <div style={{ color }} className="text-xs font-bold">
                       Click to manage students →
@@ -1410,11 +1411,11 @@ function StudentsView({ batch = null, section = null, toast }) {
                                 {studentDisplayName(s)}
                                 {middle ? ` ${middle.charAt(0)}.` : ""}
                                 <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
-                                  (s.academic_status ?? (Number(s.graduation_year) > 0 && Number(s.graduation_year) <= new Date().getFullYear() ? "Alumni" : "Current Student")) === "Alumni"
+                                  (Boolean(s.is_alumni) || String(s.role || "").toLowerCase() === "alumni" || s.academic_status === "Alumni")
                                     ? "bg-emerald-50 text-emerald-700"
                                     : "bg-indigo-50 text-indigo-700"
                                 }`}>
-                                  {s.academic_status ?? (Number(s.graduation_year) > 0 && Number(s.graduation_year) <= new Date().getFullYear() ? "Alumni" : "Current Student")}
+                                  {(Boolean(s.is_alumni) || String(s.role || "").toLowerCase() === "alumni" || s.academic_status === "Alumni") ? "Alumni" : "Current Student"}
                                 </span>
                               </div>
                               <div className="text-xs text-slate-500">
@@ -1596,7 +1597,7 @@ export default function BatchSectionStudentsPage() {
           onSelect={handleStepSelect}
           counts={{
             batches: totals?.batches,
-            sections: totals?.sections ?? sectionTotal,
+            sections: view === "sections" && !batch && sectionTotal != null ? sectionTotal : totals?.sections,
             students: totals?.students,
           }}
         />

@@ -24,9 +24,12 @@ export function AuthProvider({ children }) {
           }
           setUser(data);
         })
-        .catch(() => {
-          localStorage.removeItem('sb_token');
-          setUser(null);
+        .catch((error) => {
+          const status = error?.response?.status;
+          if (status === 401 || error?.response?.data?.code === 'EMAIL_UNVERIFIED') {
+            localStorage.removeItem('sb_token');
+            setUser(null);
+          }
         })
         .finally(() => setLoading(false));
     } else {

@@ -25,6 +25,12 @@ class MessageController extends Controller
     {
         $userId = $request->user()->id;
         $seen   = [];
+        $unreadBySender = Message::query()
+            ->where('receiver_id', $userId)
+            ->where('is_read', false)
+            ->selectRaw('sender_id, COUNT(*) as aggregate')
+            ->groupBy('sender_id')
+            ->pluck('aggregate', 'sender_id');
 
         $conversations = Message::query()
             ->where(function ($q) use ($userId) {
@@ -50,7 +56,7 @@ class MessageController extends Controller
                 $seen[$otherId] = true;
                 return true;
             })
-            ->map(function ($message) use ($userId) {
+            ->map(function ($message) use ($userId, $unreadBySender) {
                 $other = $message->sender_id === $userId
                     ? $message->receiver
                     : $message->sender;
@@ -69,10 +75,7 @@ class MessageController extends Controller
                     'sender'       => $message->sender,
                     'receiver'     => $message->receiver,
                     'other_user'   => $other,
-                    'unread_count' => Message::where('sender_id', $other->id)
-                        ->where('receiver_id', $userId)
-                        ->where('is_read', false)
-                        ->count(),
+                    'unread_count' => (int) ($unreadBySender[$other->id] ?? 0),
                 ];
             })
             ->filter()

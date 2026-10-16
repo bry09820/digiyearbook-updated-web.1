@@ -82,7 +82,7 @@ export default function PostContextMenu({ post, onClose, onDelete, onUpdated }) 
       {/* Sheet */}
       <div className="fixed inset-0 z-[8001] flex items-center justify-center pointer-events-none">
         <div ref={sheetRef}
-          className="w-[640px] min-w-[560px] max-w-[92vw] bg-white rounded-2xl overflow-visible shadow-2xl border border-slate-100 pointer-events-auto font-sans"
+          className="w-[min(640px,92vw)] max-w-[92vw] bg-white rounded-2xl overflow-visible shadow-2xl border border-slate-100 pointer-events-auto font-sans"
           style={{ animation: 'sheetUp 0.22s cubic-bezier(0.34,1.2,0.64,1)' }}
         >
 

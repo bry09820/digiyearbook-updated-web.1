@@ -57,6 +57,16 @@ class Photo extends Model implements AnalyzablePhoto
             ->whereNotNull('viewer_user_id');
     }
 
+    public function reactions(): HasMany
+    {
+        return $this->hasMany(PostReaction::class);
+    }
+
+    public function comments(): HasMany
+    {
+        return $this->hasMany(PostComment::class);
+    }
+
     public function taggedStudents(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'tagged_photos', 'photo_id', 'user_id')

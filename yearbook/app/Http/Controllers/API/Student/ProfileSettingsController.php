@@ -193,19 +193,17 @@ class ProfileSettingsController extends Controller
     // Track profile view 
     public function trackView(Request $request, int $id): JsonResponse
     {
-        $profile = User::findOrFail($id);
+        User::findOrFail($id);
 
         if ($request->user()?->id === $id) {
             return response()->json(['tracked' => false]);
         }
 
-        ProfileView::create([
-            'viewed_user_id' => $id,
-            'viewer_user_id' => $request->user()?->id,
-            'viewer_ip'      => $request->ip(),
-        ]);
-
-        $profile->increment('profile_views');
+        $count = app(\App\Services\Analytics\EngagementAnalyticsService::class)->recordView(
+            viewedUserId: $id,
+            viewerUserId: $request->user()?->id,
+            ipAddress: $request->ip()
+        );
 
         AlumniActivity::create([
             'user_id'     => $id,
@@ -214,7 +212,7 @@ class ProfileSettingsController extends Controller
             'metadata'    => ['viewer_id' => $request->user()?->id],
         ]);
 
-        return response()->json(['tracked' => true]);
+        return response()->json(['tracked' => true, 'profile_views' => $count]);
     }
 
     // Top viewed profiles 

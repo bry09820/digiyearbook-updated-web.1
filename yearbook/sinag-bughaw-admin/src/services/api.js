@@ -38,23 +38,16 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
 
-    if (status === 401) {
+    const requestUrl = String(error.config?.url ?? "");
+    const isLoginAttempt = requestUrl.includes("/admin/login");
+
+    if (status === 401 && !isLoginAttempt) {
       localStorage.removeItem("admin_token");
       localStorage.removeItem("admin_user");
-      // Redirect without reload loop only if not already on /login
+      // Stay on this admin app. Do not send the browser to another dev server.
       if (window.location.pathname !== "/login") {
-        window.location.href = "/login";
+        window.location.assign("/login");
       }
-    }
-
-    if (status === 403) {
-      // Optional: redirect to an unauthorized page
-      // window.location.href = "/unauthorized";
-      console.warn("Forbidden: insufficient permissions.");
-    }
-
-    if (status >= 500) {
-      console.error("Server error:", error.response?.data?.message ?? "Unexpected error");
     }
 
     return Promise.reject(error);

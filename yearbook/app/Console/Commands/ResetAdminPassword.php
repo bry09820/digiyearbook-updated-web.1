@@ -9,8 +9,8 @@ use Illuminate\Support\Facades\Hash;
 class ResetAdminPassword extends Command
 {
     protected $signature = 'admin:reset-password
-        {username=admin : Admin username to create or reset}
-        {password=Admin@2025! : New plain-text password}';
+        {username : Admin username to create or reset}
+        {password : New plain-text password}';
 
     protected $description = 'Create or reset an admin account and store a single password hash';
 

@@ -63,8 +63,6 @@ class BillingController extends Controller
             return $this->fail($request, 'Could not start checkout. Please try again.', 502);
         }
 
-        Log::info('PayMongo billing checkout response', $result);
-
         $checkoutUrl = data_get($result, 'data.attributes.checkout_url');
         $sessionId   = data_get($result, 'data.id');
 

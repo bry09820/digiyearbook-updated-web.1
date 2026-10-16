@@ -5,7 +5,7 @@
  * - 3-column desktop layout: left sidebar | feed | right sidebar
  * - Posts fetched from GET /api/feed?filter=all|public|batchmates|mine
  * - Visibility: public posts + same-year batchmate posts + posts the viewer is tagged in + own posts
- * No likes, no comments view count + tag students only
+ * Reactions (Like, Heart, Haha) and comments follow the admin Allow Reactions and Allow Comments toggles.
  * Tag modal POST /api/students/profile/tagged-photos
  * - Uses existing Navbar + Footer from your codebase
  *
@@ -19,10 +19,12 @@ import { profileApi }                                from '@/api/profile.api';
 import { storageUrl }                                from '@/api/client';
 import axios                                         from '@/api/client';
 import PostContextMenu                               from '@/features/profile/components/PostContextMenu';
+import PostEngagement                                from '@/features/profile/components/PostEngagement';
 import Navbar                                        from '@/components/layout/Navbar';
 import Footer                                        from '@/components/layout/Footer';
 import LoadingSkeleton                               from '@/components/ui/LoadingSkeleton';
 import { getSubscriptionTier }                       from '@/utils/subscription';
+import { useAppConfig }                              from '@/features/platform/AppConfigProvider';
 
 // Tier helper
 const getTier = (user) => getSubscriptionTier(user);
@@ -64,15 +66,6 @@ const batchLabel = (user) =>
 const batchRequestValue = (user) =>
   firstValue(user, ['graduation_year', 'batch_year', 'year', 'batch.year', 'batch_id', 'batch.id']);
 
-const meaningfulText = (value) => {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  const compact = text.replace(/[^a-z0-9]/gi, '').toLowerCase();
-  if (text.length < 3 || compact.length < 3) return false;
-  if (/^(test|asdf|qwerty|sample|lorem|abc|haha)+$/i.test(compact)) return false;
-  if (/^(.)\1{2,}$/.test(compact)) return false;
-  return true;
-};
-
 const postMedia = (post) => (Array.isArray(post?.media) ? post.media.filter(item => item?.file_path) : []);
 
 const uniqueTaggedStudents = (students = []) => {
@@ -85,11 +78,11 @@ const uniqueTaggedStudents = (students = []) => {
   });
 };
 
-const shouldShowFeedPost = (post) => {
-  const status = String(post?.status || post?.moderation_status || post?.approval_status || '').toLowerCase();
-  if (['pending', 'rejected', 'unapproved', 'hidden', 'flagged'].includes(status)) return false;
-  if (post?.is_approved === false || post?.approved === false || post?.is_public === false) return false;
-  return postMedia(post).length > 0 || meaningfulText(post?.caption || post?.body || post?.message);
+const EMPTY_FEED = {
+  all: 'No posts here yet.',
+  public: 'No public posts yet.',
+  batchmates: 'No batchmate posts yet.',
+  mine: 'You have not posted yet.',
 };
 
 // Visibility pill
@@ -372,7 +365,7 @@ function TagModal({ photoId, existingTags = [], batchmates = [], onClose, onSave
 // FIX: onTagSaved now receives the full tagged_students array from the server,
 // not a list of IDs. Passed straight through to TagModal's onSaved prop.
 
-function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onReport, onMenuClick }) {
+function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onReport, onMenuClick, onEngagement }) {
   const [tagOpen, setTagOpen] = useState(false);
   const cardRef = useRef(null);
   const viewedRef = useRef(false);
@@ -519,6 +512,14 @@ function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onRepor
             {(post.views_count ?? post.views ?? 0).toLocaleString()} views
           </div>
         </div>
+
+        <PostEngagement
+          post={post}
+          currentUser={currentUser}
+          compact
+          startOpen
+          onChange={onEngagement}
+        />
       </article>
 
       {tagOpen && (
@@ -560,7 +561,7 @@ function LeftSidebar({ user, isOn }) {
   });
 
   return (
-    <aside className="flex flex-col gap-4 sticky top-[88px]">
+    <aside className="flex flex-col gap-4">
       {/* Profile card */}
       <div className="bg-white rounded-2xl border border-slate-100 p-5">
         <div className="flex flex-col items-center text-center gap-2 pb-4 border-b border-slate-100 mb-4">
@@ -722,7 +723,7 @@ function RightSidebar({ batchmates, batchStats, topViewed, currentUser, memories
   const userBatchLabel = batchLabel(currentUser);
 
   return (
-    <aside className="flex flex-col gap-4 sticky top-[88px]">
+    <aside className="flex flex-col gap-4">
 
       {/* Batchmates */}
       {sameBatchmates.length > 0 && (
@@ -853,13 +854,16 @@ function RightSidebar({ batchmates, batchStats, topViewed, currentUser, memories
 // Main page
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { isOn } = useAppConfig();
 
-  const [filter,      setFilter]      = useState('all');
-  const [posts,       setPosts]       = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [page,        setPage]        = useState(1);
-  const [hasMore,     setHasMore]     = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [filter,        setFilter]        = useState('all');
+  const [resultsFilter, setResultsFilter] = useState(null);
+  const [posts,         setPosts]         = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [page,          setPage]          = useState(1);
+  const [hasMore,       setHasMore]       = useState(true);
+  const [loadingMore,   setLoadingMore]   = useState(false);
+  const feedRequest = useRef(0);
 
   const [batchmates,  setBatchmates]  = useState([]);
   const [topViewed,   setTopViewed]   = useState([]);
@@ -895,20 +899,25 @@ export default function DashboardPage() {
 
   // Fetch feed
   const fetchFeed = useCallback(async (activeFilter, activePage) => {
+    const requestId = ++feedRequest.current;
     try {
       const { data } = await axios.get('/feed', {
         params: { filter: activeFilter, page: activePage, per_page: 10 },
       });
-      const newPosts = (data.data ?? data ?? []).filter(shouldShowFeedPost);
-      if (activePage === 1) {
-        setPosts(newPosts);
-      } else {
-        setPosts(prev => [...prev, ...newPosts]);
-      }
-      const meta = data.meta ?? data;
-      setHasMore(meta.current_page < meta.last_page || newPosts.length === 10);
+      if (requestId !== feedRequest.current) return;
+      const newPosts = Array.isArray(data?.data) ? data.data : [];
+      setPosts(prev => activePage === 1 ? newPosts : [...prev, ...newPosts]);
+      setResultsFilter(data?.meta?.filter || activeFilter);
+      const meta = data?.meta ?? {};
+      setHasMore(Number(meta.current_page ?? 1) < Number(meta.last_page ?? 1));
+      setPage(Number(meta.current_page ?? activePage));
     } catch {
-      // silently degrade
+      if (requestId !== feedRequest.current) return;
+      if (activePage === 1) {
+        setPosts([]);
+        setResultsFilter(activeFilter);
+      }
+      setHasMore(false);
     }
   }, []);
 
@@ -996,6 +1005,43 @@ export default function DashboardPage() {
     ));
   }, []);
 
+  const handleEngagement = useCallback((postId, engagement) => {
+    setPosts(prev => prev.map(p => p.id !== postId ? p : {
+      ...p,
+      reactions: engagement?.reactions ?? p.reactions,
+      comments_count: engagement?.comments_count ?? p.comments_count,
+    }));
+  }, []);
+
+  const postIds = posts.map(post => post.id).join(',');
+  useEffect(() => {
+    if (!postIds) return undefined;
+    let stopped = false;
+    const refreshEngagement = async () => {
+      try {
+        const { data } = await axios.get('/feed/engagement', { params: { ids: postIds } });
+        if (stopped) return;
+        const summary = data.data ?? {};
+        setPosts(prev => prev.map(post => {
+          const next = summary[post.id] ?? summary[String(post.id)];
+          if (!next) return post;
+          return {
+            ...post,
+            reactions: next.reactions ?? post.reactions,
+            comments_count: next.comments_count ?? post.comments_count,
+          };
+        }));
+      } catch {
+        // The next poll will pick up the latest counts.
+      }
+    };
+    const timer = window.setInterval(refreshEngagement, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [postIds]);
+
   const [postMenu, setPostMenu] = useState(null);
 
   const handlePostDeleted = (postId) => {
@@ -1030,9 +1076,9 @@ export default function DashboardPage() {
       {/* Watermark */}
       <div
         aria-hidden="true"
-        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-[30deg]
-                   text-[clamp(2rem,6vw,5rem)] font-black text-black/[0.018]
-                   pointer-events-none select-none z-0 whitespace-nowrap"
+        className="fixed inset-x-0 top-1/2 -translate-y-1/2 -rotate-[30deg] overflow-hidden
+                   text-center text-[clamp(2rem,6vw,5rem)] font-black text-black/[0.018]
+                   pointer-events-none select-none z-0"
       >
         {user?.name}
       </div>
@@ -1044,8 +1090,11 @@ export default function DashboardPage() {
         {/* Balanced 3-col: spacer | feed | sidebar — keeps feed (and search) truly centered */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px)_minmax(0,680px)_minmax(0,260px)] xl:grid-cols-[minmax(0,280px)_minmax(0,680px)_minmax(0,280px)] gap-6 items-start justify-center">
 
-          {/* Left spacer — mirrors right sidebar width so the feed column sits dead-center */}
-          <div className="hidden lg:block" aria-hidden="true" />
+          <div className="hidden lg:block w-full max-w-[280px] self-stretch">
+            <div className="sticky top-[88px] z-10 flex max-h-[calc(100vh-104px)] flex-col gap-4 overflow-y-auto">
+              <LeftSidebar user={user} isOn={isOn} />
+            </div>
+          </div>
 
           {/* Feed column */}
           <div className="min-w-0 w-full max-w-[680px] mx-auto">
@@ -1126,12 +1175,12 @@ export default function DashboardPage() {
             </div>
 
             {/* Posts */}
-            {loading && posts.length === 0 ? (
+            {loading || resultsFilter !== filter ? (
               <LoadingSkeleton variant="feed" count={3} />
             ) : posts.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center">
                 <i className="fas fa-photo-video text-3xl text-slate-200 block mb-3" aria-hidden="true" />
-                <p className="text-[14px] font-semibold text-slate-400 m-0">No posts here yet.</p>
+                <p className="text-[14px] font-semibold text-slate-400 m-0">{EMPTY_FEED[filter] ?? EMPTY_FEED.all}</p>
                 <p className="text-[12px] text-slate-300 m-0 mt-1">
                   {filter === 'mine' ? 'Upload your first photo in Gallery.' : 'Check back later!'}
                 </p>
@@ -1153,6 +1202,7 @@ export default function DashboardPage() {
                     batchmates={batchmates}
                     onTagSaved={handleTagSaved}
                     onViewed={handlePostViewed}
+                    onEngagement={handleEngagement}
                     onReport={handleReportPost}
                     onMenuClick={(event, item) => {
                       event.stopPropagation();
@@ -1181,21 +1231,23 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Right sidebar */}
-          <div className="hidden lg:block w-full max-w-[280px]">
-            <div className="mb-5 text-right">
-              <p className="text-[11px] text-slate-400 m-0 tracking-widest uppercase">Mabuhay, Pioneer!</p>
-              <p className="text-[15px] font-extrabold text-[#1d2b4b] m-0">
-                Welcome back, <span className="text-[#3f51b5]">{user?.name?.split(' ')[0]}</span>
-              </p>
+          {/* Right sidebar stays visible while the feed scrolls */}
+          <div className="hidden lg:block w-full max-w-[280px] self-stretch">
+            <div className="sticky top-[88px] z-20 flex max-h-[calc(100vh-104px)] flex-col gap-4 overflow-y-auto">
+              <div className="text-right">
+                <p className="text-[11px] text-slate-400 m-0 tracking-widest uppercase">Mabuhay, Pioneer!</p>
+                <p className="text-[15px] font-extrabold text-[#1d2b4b] m-0">
+                  Welcome back, <span className="text-[#3f51b5]">{user?.name?.split(' ')[0]}</span>
+                </p>
+              </div>
+              <RightSidebar
+                batchmates={batchmates}
+                topViewed={topViewed}
+                memories={memories}
+                batchStats={batchStats}
+                currentUser={user}
+              />
             </div>
-            <RightSidebar
-              batchmates={batchmates}
-              topViewed={topViewed}
-              memories={memories}
-              batchStats={batchStats}
-              currentUser={user}
-            />
           </div>
         </div>
       </main>

@@ -47,11 +47,9 @@ function Badge({ label, tone = "default" }) {
 function standingBadge(user) {
   const role = String(user.role || "").toLowerCase();
   if (role === "faculty" || role === "admin") return <span className="text-xs text-slate-400">—</span>;
-  const year = Number(user.graduation_year);
   const alumni = Boolean(user.is_alumni)
     || role === "alumni"
-    || user.academic_status === "Alumni"
-    || (Number.isFinite(year) && year > 0 && year <= new Date().getFullYear());
+    || user.academic_status === "Alumni";
   return roleBadge(alumni ? "alumni" : "student", alumni ? "Alumni" : "Current Student");
 }
 

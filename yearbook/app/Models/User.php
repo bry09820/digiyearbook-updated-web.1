@@ -777,6 +777,21 @@ class User extends Authenticatable
         return $this->hasMany(ProfileView::class, 'viewed_user_id');
     }
 
+    /**
+     * Student and alumni accounts counted on the admin dashboard.
+     * Directory listings use this so their totals match those counters.
+     */
+    public function scopeDashboardAccounts($query)
+    {
+        return $query->where(function ($accounts) {
+            $accounts->where(function ($students) {
+                $students->currentStudents();
+            })->orWhere(function ($alumni) {
+                $alumni->alumni();
+            });
+        });
+    }
+
     public function scopeAlumni($query)
     {
         return $query->where(function ($alumni) {

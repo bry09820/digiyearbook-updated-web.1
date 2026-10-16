@@ -30,13 +30,7 @@ class EngagementAnalyticsService
 
     public function myStats(User $user): array
     {
-        $profileViews = ProfileView::query()
-            ->where('viewed_user_id', $user->id)
-            ->where(function ($view) use ($user) {
-                $view->whereNull('viewer_user_id')
-                    ->orWhere('viewer_user_id', '!=', $user->id);
-            })
-            ->count();
+        $profileViews = $this->liveProfileViewCount($user->id);
 
         if ((int) $user->profile_views !== $profileViews) {
             $user->forceFill(['profile_views' => $profileViews])->saveQuietly();
@@ -165,34 +159,48 @@ class EngagementAnalyticsService
     }
 
     // Core record logic 
-    public function recordView(int $viewedUserId, ?int $viewerUserId, string $ipAddress): void
+    public function liveProfileViewCount(int $userId): int
     {
-        if ($viewerUserId && $viewerUserId === $viewedUserId) {
-            return;
+        return ProfileView::query()
+            ->where('viewed_user_id', $userId)
+            ->where(function ($view) use ($userId) {
+                $view->whereNull('viewer_user_id')
+                    ->orWhere('viewer_user_id', '!=', $userId);
+            })
+            ->count();
+    }
+
+    public function recordView(int $viewedUserId, ?int $viewerUserId, string $ipAddress): int
+    {
+        if (! User::query()->whereKey($viewedUserId)->exists()) {
+            abort(404);
         }
 
-        $alreadyViewed = ProfileView::where('viewed_user_id', $viewedUserId)
-            ->where(function ($q) use ($viewerUserId, $ipAddress) {
-                if ($viewerUserId) {
-                    $q->where('viewer_user_id', $viewerUserId);
-                } else {
-                    $q->whereNull('viewer_user_id')->where('viewer_ip', $ipAddress);
-                }
-            })
-            ->where('created_at', '>=', now()->subHour())
+        if ($viewerUserId && $viewerUserId === $viewedUserId) {
+            return $this->liveProfileViewCount($viewedUserId);
+        }
+
+        $alreadyViewed = ProfileView::query()
+            ->where('viewed_user_id', $viewedUserId)
+            ->when(
+                $viewerUserId,
+                fn ($query) => $query->where('viewer_user_id', $viewerUserId),
+                fn ($query) => $query->whereNull('viewer_user_id')->where('viewer_ip', $ipAddress)
+            )
             ->exists();
 
-        if ($alreadyViewed) {
-            return;
+        if (! $alreadyViewed) {
+            ProfileView::create([
+                'viewed_user_id' => $viewedUserId,
+                'viewer_user_id' => $viewerUserId,
+                'viewer_ip'      => $ipAddress,
+            ]);
         }
 
-        ProfileView::create([
-            'viewed_user_id' => $viewedUserId,
-            'viewer_user_id' => $viewerUserId,
-            'viewer_ip'      => $ipAddress,
-        ]);
+        $count = $this->liveProfileViewCount($viewedUserId);
+        User::where('id', $viewedUserId)->update(['profile_views' => $count]);
 
-        User::where('id', $viewedUserId)->increment('profile_views');
+        return $count;
     }
 
     public function weeklyTrend(int $userId, int $days = 30): array

@@ -57,13 +57,24 @@ class AnalyticsController extends Controller
     //Called by StudentProfileView on every genuine visit 
     public function recordView(Request $request, int $userId): JsonResponse
     {
-        $this->analytics->recordView(
+        $viewerId = $request->user()?->id ?? auth('sanctum')->id();
+        if (! $viewerId) {
+            return response()->json([
+                'recorded' => false,
+                'profile_views' => null,
+            ]);
+        }
+
+        $profileViews = $this->analytics->recordView(
             viewedUserId: $userId,
-            viewerUserId: $request->user()?->id, // null for guests
+            viewerUserId: $viewerId ? (int) $viewerId : null,
             ipAddress:    $request->ip()
         );
 
-        return response()->json(['recorded' => true]);
+        return response()->json([
+            'recorded' => true,
+            'profile_views' => $profileViews,
+        ]);
     }
 
     public function recordContentView(Request $request): JsonResponse

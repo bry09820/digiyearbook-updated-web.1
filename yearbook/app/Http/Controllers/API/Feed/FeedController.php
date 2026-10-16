@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Photo;
 use App\Models\User;
 use App\Services\Analytics\EngagementAnalyticsService;
+use App\Support\PostEngagementSummary;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -19,9 +20,9 @@ class FeedController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user    = $request->user();
-        $filter  = $request->query('filter', 'all');
+        $filter  = $this->normalizeFilter($request->query('filter', 'all'));
         $search  = trim((string) $request->query('q', ''));
-        $perPage = (int) $request->query('per_page', 10);
+        $perPage = min(30, max(1, (int) $request->query('per_page', 10)));
 
         $user->loadMissing('studentRecord');
 
@@ -74,15 +75,21 @@ class FeedController extends Controller
             ->orderByDesc('created_at')
             ->paginate($perPage);
 
+        $summaries = PostEngagementSummary::forPhotoIds(
+            $paginator->getCollection()->pluck('id')->all(),
+            $user->id
+        );
+
         return response()->json([
             'data' => $paginator->map(fn (Photo $photo) =>
-                $this->formatPost($photo, $user)
+                $this->formatPost($photo, $user, $summaries[(int) $photo->id] ?? null)
             ),
             'meta' => [
                 'current_page' => $paginator->currentPage(),
                 'last_page'    => $paginator->lastPage(),
                 'per_page'     => $paginator->perPage(),
                 'total'        => $paginator->total(),
+                'filter'       => $filter,
             ],
         ]);
     }
@@ -110,7 +117,7 @@ class FeedController extends Controller
         ]);
     }
 
-    private function formatPost(Photo $photo, User $authUser): array
+    private function formatPost(Photo $photo, User $authUser, ?array $engagement = null): array
     {
         if (! array_key_exists('unique_views_count', $photo->getAttributes())) {
             $photo->loadCount('postViews as unique_views_count');
@@ -174,6 +181,8 @@ class FeedController extends Controller
             'is_reported'     => collect($media)->contains(fn ($m) => (bool) ($m['is_reported'] ?? false)),
 
             'tagged_students' => $taggedStudents,
+            'reactions'       => $engagement['reactions'] ?? PostEngagementSummary::blank()['reactions'],
+            'comments_count'  => $engagement['comments_count'] ?? 0,
         ];
     }
 
@@ -184,6 +193,13 @@ class FeedController extends Controller
             ?: 'Student';
     }
 
+    private function normalizeFilter(mixed $filter): string
+    {
+        $filter = is_string($filter) ? $filter : 'all';
+
+        return in_array($filter, ['all', 'public', 'batchmates', 'mine'], true) ? $filter : 'all';
+    }
+
     private function applyAudience($query, User $viewer, string $filter): void
     {
         $viewer->loadMissing('studentRecord');
@@ -192,18 +208,28 @@ class FeedController extends Controller
         $query->where(function ($visible) use ($viewer, $filter, $year) {
             if ($filter === 'mine') {
                 $visible->where('user_id', $viewer->id);
+
                 return;
             }
 
             if ($filter === 'public') {
-                $visible->where(fn ($public) => $this->wherePublicVisibility($public))
-                    ->orWhere('user_id', $viewer->id);
+                $this->wherePublicVisibility($visible);
+
                 return;
             }
 
             if ($filter === 'batchmates') {
-                $visible->where('user_id', $viewer->id)
-                    ->orWhere(fn ($friends) => $this->whereBatchmateVisibility($friends, $year));
+                $visible->where(function ($batch) use ($viewer, $year) {
+                    $batch->where(function ($own) use ($viewer) {
+                        $own->where('user_id', $viewer->id)
+                            ->whereIn('visibility', ['friends', 'batchmates']);
+                    });
+
+                    if ($year) {
+                        $batch->orWhere(fn ($friends) => $this->whereBatchmateVisibility($friends, $year));
+                    }
+                });
+
                 return;
             }
 

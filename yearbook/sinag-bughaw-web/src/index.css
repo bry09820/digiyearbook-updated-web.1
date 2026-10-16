@@ -13,6 +13,17 @@
   --color-nu-gold: #fdb813;
 }
 
+html,
+body,
+#root {
+  max-width: 100%;
+}
+
+img,
+video {
+  max-width: 100%;
+}
+
 body {
   font-family: "Inter", sans-serif;
   margin: 0;

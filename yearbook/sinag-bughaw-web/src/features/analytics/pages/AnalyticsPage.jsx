@@ -4,7 +4,6 @@ import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import { useAnalyticsDashboard } from '../hooks/useAnalytics';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { recordProfileView } from '../../../api/analytics.api';
 import {
   trackPageView,
   trackTrendingClick,
@@ -194,7 +193,6 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
       navigate(person.url || '#');
       return;
     }
-    recordProfileView(person.id);
     openProfile(person);
   }
 
@@ -204,7 +202,6 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
       navigate(person.url || '#');
       return;
     }
-    recordProfileView(person.id);
     openProfile(person);
   }
 
@@ -499,7 +496,7 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
                     <AlumniCard
                       key={person.id} person={person} rank={i + 1} badge={person.views}
                       currentUserId={currentUserId}
-                      onClick={() => { recordProfileView(person.id); openProfile(person); }}
+                      onClick={() => openProfile(person)}
                     />
                   ))}
                 </div>

@@ -4,7 +4,6 @@ import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import { studentsApi } from '@/api/student.api';
 import { faceApi } from '@/api/gallery.api';
-import { useAuth } from '@/features/auth/hooks/useAuth';
 import FaceSearchButton from '@/components/ui/FaceSearchButton';
 import FilterTabStrip from '@/components/ui/FilterTabStrip';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
@@ -214,14 +213,13 @@ function StudentCard({ student, index, isMatched, matchData, locked = false, onL
 export default function DirectoryPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
   const { isOn } = useAppConfig();
   const { isSubscribed } = useSubscriptionGuard();
   const premiumEnabled = isOn('enable_premium_subscription');
   const profilesLocked = premiumEnabled && !isSubscribed;
 
   const initialQuery = searchParams.get('q') || '';
-  const cachedDirectory = readPageCache(pageCacheKey(['directory', initialQuery, 'All Programs', 1]));
+  const cachedDirectory = readPageCache(pageCacheKey(['directory-accounts', initialQuery, 'All Programs', 1]));
   const [students, setStudents] = useState(cachedDirectory?.students ?? []);
   const [loading,  setLoading]  = useState(!cachedDirectory);
   const [query,    setQuery]    = useState(initialQuery);
@@ -242,16 +240,12 @@ export default function DirectoryPage() {
   const suggestTimer = useRef(null);
 
   const isFaceMode = faceMatches.length > 0;
-  const currentUserId = Number(user?.id);
-  const visibleStudents = Number.isFinite(currentUserId) && currentUserId > 0
-    ? students.filter(student => studentUserId(student) !== currentUserId)
-    : students;
 
   const promptUpgrade = () => navigate('/premium');
 
   // Fetch students
   const fetchStudents = useCallback(async (q = query, c = course, p = 1) => {
-    const cacheKey = pageCacheKey(['directory', q, c, p]);
+    const cacheKey = pageCacheKey(['directory-accounts', q, c, p]);
     const cached = readPageCache(cacheKey);
     if (cached) {
       setStudents(cached.students);
@@ -288,17 +282,13 @@ export default function DirectoryPage() {
     setSuggestLoading(true);
     try {
       const { data } = await studentsApi.suggest({ q });
-      const hiddenId = Number(user?.id);
-      setSuggestions((data.suggestions ?? []).filter(s => {
-        const id = Number(s?.id ?? s?.user_id ?? s?.account_user_id);
-        return !Number.isFinite(hiddenId) || hiddenId <= 0 || id !== hiddenId;
-      }));
+      setSuggestions(data.suggestions ?? []);
     } catch {
       setSuggestions([]);
     } finally {
       setSuggestLoading(false);
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => { fetchStudents(); }, []);
 
@@ -479,10 +469,10 @@ export default function DirectoryPage() {
         )}
 
         {/* Loading */}
-        {loading && visibleStudents.length === 0 ? (
+        {loading && students.length === 0 ? (
           <LoadingSkeleton variant="card" count={8} />
 
-        ) : visibleStudents.length === 0 ? (
+        ) : students.length === 0 ? (
           /* Empty state */
           <div className="text-center py-24 bg-white rounded-3xl shadow-sm border border-slate-100 px-6">
             <i className="fas fa-user-slash text-7xl text-slate-100 mb-5 block" />
@@ -503,7 +493,7 @@ export default function DirectoryPage() {
           <>
             {/* Student grid */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-6">
-              {visibleStudents.map((student, i) => (
+              {students.map((student, i) => (
                 <StudentCard
                   key={student.id}
                   student={student}

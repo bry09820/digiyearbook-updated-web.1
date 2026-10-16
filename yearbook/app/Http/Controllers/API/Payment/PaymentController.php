@@ -48,8 +48,6 @@ class PaymentController extends Controller
             cancelUrl:  $request->input('cancel_url'),
         );
 
-        Log::info('PayMongo response', $result);
-
         $checkoutUrl = data_get($result, 'data.attributes.checkout_url');
 
         if (! $checkoutUrl) {
@@ -89,8 +87,6 @@ class PaymentController extends Controller
         } else {
             Log::warning('PayMongo webhook accepted without signature verification (non-production)');
         }
-
-        Log::info('Webhook RAW payload', $request->all());
 
         $type = $request->json('data.attributes.type')
             ?? $request->json('type');
