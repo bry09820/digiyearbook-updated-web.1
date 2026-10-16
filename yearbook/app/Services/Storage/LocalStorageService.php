@@ -21,9 +21,12 @@ class LocalStorageService implements StorageServiceInterface
         string $folder = 'general',
         array $options = []
     ): array {
-        $path      = $file->store("public/{$folder}/users/{$userId}", 'local');
-        $publicId  = Str::after($path, 'public/');
-        $url       = Storage::url($path);
+        $path     = $file->store("{$folder}/users/{$userId}", 'public');
+        if ($path === false) {
+            throw new \RuntimeException('Could not write the upload to storage/app/public. Check that the folder is writable.');
+        }
+        $publicId = $path;
+        $url      = Storage::disk('public')->url($path);
 
         Log::info('[LocalStorage] uploadPhoto', ['path' => $path, 'url' => $url]);
 
@@ -57,7 +60,7 @@ class LocalStorageService implements StorageServiceInterface
 
     public function deletePhoto(string $publicId, string $resourceType = 'image'): array
     {
-        $deleted = Storage::disk('local')->delete('public/' . $publicId);
+        $deleted = Storage::disk('public')->delete($publicId);
         return ['success' => $deleted, 'public_id' => $publicId, 'result' => $deleted ? 'ok' : 'not_found'];
     }
 
@@ -66,7 +69,7 @@ class LocalStorageService implements StorageServiceInterface
         int $ttl = 3600,
         array $transformations = []
     ): array {
-        $url = Storage::url('public/' . $publicId);
+        $url = Storage::disk('public')->url($publicId);
         return [
             'success'    => true,
             'signed_url' => $url,

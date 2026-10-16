@@ -4,8 +4,8 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { messagesApi } from '@/api/messaging.api';
 import Navbar from '@/components/layout/Navbar';
 import { useMessaging } from '@/features/messaging/hooks/useMessaging';
-import { imageUrl } from '@/utils/imageUrl';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import { imageUrl } from '@/utils/imageUrl';
 
 function formatTime(iso) {
   if (!iso) return '';
@@ -101,6 +101,8 @@ export default function MessagesPage() {
   const [findError, setFindError] = useState('');
   const [startingId, setStartingId] = useState(null);
   const bottomRef = useRef();
+  const threadRef = useRef(null);
+  const stickToBottomRef = useRef(true);
   const fileRef = useRef();
   const findTimerRef = useRef(null);
 
@@ -123,7 +125,9 @@ export default function MessagesPage() {
   }, [recipientId, conversations, user?.id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const list = threadRef.current;
+    if (!list || !stickToBottomRef.current) return;
+    list.scrollTop = list.scrollHeight;
   }, [thread, isTyping]);
 
   useEffect(() => () => {
@@ -187,6 +191,7 @@ export default function MessagesPage() {
     setImage(null);
     setImagePreview(null);
     setShowEmoji(false);
+    stickToBottomRef.current = true;
     try { await sendMessage(Number(recipientId), text.trim(), selectedImage); }
     catch {
       setBody(text);
@@ -396,7 +401,15 @@ export default function MessagesPage() {
                 )}
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+              <div
+                ref={threadRef}
+                onScroll={() => {
+                  const list = threadRef.current;
+                  if (!list) return;
+                  stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 64;
+                }}
+                className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
+              >
                 {loading && thread.length === 0 && <LoadingSkeleton variant="row" count={5} gridClassName="space-y-3" />}
 
                 {!loading && thread.length === 0 && (

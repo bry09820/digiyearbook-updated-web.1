@@ -3,8 +3,8 @@
  * NU Lipa / Sinag-Bughaw — Admin Panel
  *
  * Single unified page with two modes:
- * Moderation Photos (album-grouped) | Videos | Voice Notes | Reported
- * Media Library Albums (CRUD) | Photos (browse) | Videos | Voice Notes
+ * Moderation Photos (album-grouped) | Videos | Reported
+ * Media Library Albums (CRUD) | Photos (browse) | Videos
  *
  * Features:
  *   Approve / Reject with reason modal
@@ -13,7 +13,7 @@
  *   Generic preview modal (video / voice)
  * Revert Status flip any approved/rejected item back to pending or opposite
  * Status History full audit trail in a slide-out drawer
- * Media Library Albums CRUD, Photos browse/delete, Videos, Voice Notes
+ * Media Library Albums CRUD, Photos browse/delete, Videos
  * Media Library album drill-down open any album and see all its photos
  */
 
@@ -1073,7 +1073,7 @@ function GenericPreviewModal({ item, type, onClose, onApprove, onReject, onRever
               <div style={{ background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, padding: "20px 22px", display: "flex", alignItems: "center", gap: 16 }}>
                 <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(66,84,197,.35)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", flexShrink: 0 }}>🎙</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: "#fff", fontWeight: 700, fontSize: "0.9rem", marginBottom: 2 }}>{item.title ?? item.filename ?? "Voice Note"}</div>
+                  <div style={{ color: "#fff", fontWeight: 700, fontSize: "0.9rem", marginBottom: 2 }}>{item.title ?? item.filename ?? "Audio"}</div>
                   <div style={{ color: "rgba(255,255,255,.45)", fontSize: "0.76rem", marginBottom: 12 }}>
                     {item.uploader ?? item.user_name ?? "Unknown"}
                     {item.duration_seconds ? ` · ${item.duration_seconds}s` : ""}
@@ -1124,7 +1124,6 @@ function GenericPreviewModal({ item, type, onClose, onApprove, onReject, onRever
 const MOD_TABS = [
   { key: "photo",    label: "Photos"      },
   { key: "video",    label: "Videos"      },
-  { key: "voice",    label: "Voice Notes" },
   { key: "reported", label: "Reported"    },
 ];
 
@@ -2182,94 +2181,11 @@ function LibraryVideosTab({ toast }) {
   );
 }
 
-// Voice Notes Tab (Library)
-function LibraryVoiceNotesTab({ toast }) {
-  const [items,        setItems]        = useState([]);
-  const [meta,         setMeta]         = useState(null);
-  const [page,         setPage]         = useState(1);
-  const [loading,      setLoading]      = useState(true);
-  const [actLoading,   setActLoading]   = useState(false);
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [deleteTarget, setDeleteTarget] = useState(null);
-
-  const load = useCallback(async (p = 1, status = statusFilter) => {
-    setLoading(true);
-    try {
-      const params = { page: p, per_page: 18 };
-      if (status !== "all") params.status = status;
-      const res = await api.get("/admin/media/voice-notes", { params });
-      setItems(res.data.data ?? []); setMeta(res.data.meta ?? null);
-    } catch { toast("Failed to load voice notes.", "error"); }
-    finally { setLoading(false); }
-  }, [statusFilter]);
-
-  useEffect(() => { load(page, statusFilter); }, [page, statusFilter]);
-
-  const handleDelete = async () => {
-    setActLoading(true);
-    try { await api.delete(`/admin/media/voice-notes/${deleteTarget.id}`); toast("Voice note deleted."); setDeleteTarget(null); load(page, statusFilter); }
-    catch { toast("Delete failed.", "error"); }
-    finally { setActLoading(false); }
-  };
-
-  const statusColor   = { pending: { color: T.warning, bg: T.warningBg }, approved: { color: T.success, bg: T.successBg }, rejected: { color: T.danger, bg: T.dangerBg } };
-  const statusOptions = [{ value: "all", label: "All" }, { value: "pending", label: "Pending" }, { value: "approved", label: "Approved" }, { value: "rejected", label: "Rejected" }];
-
-  return (
-    <>
-      <div style={{ marginBottom: 18 }}><FilterPills options={statusOptions} value={statusFilter} onChange={v => { setStatusFilter(v); setPage(1); }} /></div>
-
-      {loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} style={{ background: T.surface, borderRadius: 14, padding: 16, border: `1px solid ${T.border}`, display: "flex", gap: 14 }}>
-              <Skeleton w={48} h={48} radius={12} />
-              <div style={{ flex: 1 }}><Skeleton w="50%" h={13} style={{ marginBottom: 8 }} /><Skeleton w="30%" h={11} /></div>
-            </div>
-          ))}
-        </div>
-      ) : items.length === 0 ? <Empty icon="🎙" title="No voice notes found" subtitle="Voice notes will appear here." /> : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {items.map(vn => {
-            const sc = statusColor[vn.status] ?? { color: T.muted, bg: T.border };
-            return (
-              <div key={vn.id} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 16px", boxShadow: T.shadow, display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem", flexShrink: 0 }}>🎙</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.9rem", color: T.text, marginBottom: 2 }}>{vn.title ?? "Untitled"}</div>
-                  <div style={{ fontSize: "0.76rem", color: T.muted }}>
-                    From <strong>{vn.sender}</strong> → <strong>{vn.recipient}</strong>
-                    {vn.duration_seconds ? ` · ${vn.duration_seconds}s` : ""} · {vn.created_at_human}
-                  </div>
-                  {vn.reject_reason && (
-                    <div style={{ fontSize: "0.74rem", color: T.danger, marginTop: 2 }}>Reason: {vn.reject_reason}</div>
-                  )}
-                </div>
-                {vn.audio_url && <audio src={vn.audio_url} controls style={{ height: 32 }} />}
-                <Badge label={vn.status ?? "pending"} color={sc.color} bg={sc.bg} />
-                <OverflowMenu
-                  actions={[
-                    { label: "Delete voice note", destructive: true, onClick: () => setDeleteTarget(vn) },
-                  ]}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <Pagination meta={meta} onPage={p => setPage(p)} />
-      <ConfirmModal open={!!deleteTarget} title="Delete Voice Note" message={`Delete "${deleteTarget?.title ?? "this voice note"}"?`} onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} loading={actLoading} />
-    </>
-  );
-}
-
 // Media Library Mode
 const LIB_TABS = [
   { key: "albums", label: "Albums"      },
   { key: "photos", label: "Photos"      },
   { key: "videos", label: "Videos"      },
-  { key: "voice",  label: "Voice Notes" },
 ];
 
 function MediaLibraryMode({ toast }) {
@@ -2287,7 +2203,6 @@ function MediaLibraryMode({ toast }) {
           <StatCard icon="albums" label="Albums"      value={stats.albums}      />
           <StatCard icon="photos" label="Photos"      value={stats.photos}      />
           <StatCard icon="videos" label="Videos"      value={stats.videos}      />
-          <StatCard icon="voice"  label="Voice Notes" value={stats.voice_notes} />
         </div>
       )}
 
@@ -2304,7 +2219,6 @@ function MediaLibraryMode({ toast }) {
         {activeTab === "albums" && <LibraryAlbumsTab     toast={toast} />}
         {activeTab === "photos" && <LibraryPhotosTab     toast={toast} />}
         {activeTab === "videos" && <LibraryVideosTab     toast={toast} />}
-        {activeTab === "voice"  && <LibraryVoiceNotesTab toast={toast} />}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Component, useEffect, useState } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import { COURSE_LABELS } from '@/api/batch.api';
@@ -13,19 +13,61 @@ import { hasPaidAccess } from '@/utils/subscription';
 import { useChatHeads } from '@/features/messaging/context/ChatHeadsContext';
 
 const discoveryStudentApi = {
-  show: (id) => api.get(`/discover/students/${id}`),
+  show: (id, kind) => api.get(`/discover/students/${id}`, {
+    params: kind ? { as: kind } : {},
+  }),
 };
 
 function getInitials(name = '') {
   return name.trim().split(/\s+/).map(w => w[0]?.toUpperCase() || '').slice(0, 2).join('');
 }
 
-function safeArray(val) {
-  if (!val) return [];
-  const values = Array.isArray(val) ? val : (() => {
-    try { return JSON.parse(val); } catch { return []; }
-  })();
-  return values.filter(isMeaningfulValue);
+function profileText(value) {
+  if (value == null || value === false) return '';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || text === '-' || text === '—' || text === 'â€”') return '';
+    return text;
+  }
+  if (Array.isArray(value)) return value.map(profileText).filter(Boolean).join(', ');
+  if (typeof value === 'object') {
+    return profileText(value.title ?? value.name ?? value.label ?? value.text ?? '');
+  }
+  return '';
+}
+
+function achievementEntries(student) {
+  const items = Array.isArray(student?.achievement_items) ? student.achievement_items : [];
+  const fromRelation = items.map(item => ({
+    title: profileText(item?.title),
+    subtitle: profileText(item?.subtitle),
+    date: profileText(item?.date_awarded),
+  })).filter(item => item.title);
+  const known = new Set(fromRelation.map(item => item.title.toLowerCase()));
+  const fromText = profileList(student?.achievements)
+    .filter(text => !known.has(text.toLowerCase()))
+    .map(text => ({ title: text, subtitle: '', date: '' }));
+  return [...fromRelation, ...fromText];
+}
+
+function profileList(value) {
+  if (Array.isArray(value)) return value.map(profileText).filter(Boolean);
+  if (value && typeof value === 'object') {
+    return Object.values(value).map(profileText).filter(Boolean);
+  }
+  const text = profileText(value);
+  if (!text) return [];
+  if (text.startsWith('[') || text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') return profileList(parsed);
+    } catch {
+      // Plain sentence, not JSON.
+    }
+  }
+  if (text.includes(',')) return text.split(/\s*,\s*/).map(part => part.trim()).filter(Boolean);
+  return [text];
 }
 
 function isMeaningfulValue(value) {
@@ -66,6 +108,7 @@ function InfoTile({ icon, label, value }) {
 }
 
 function QuoteBlock({ icon, label, text, borderColor = 'border-amber-200' }) {
+  text = profileText(text);
   if (!text) return null;
   return (
     <div className="pb-4 mb-4 border-b border-slate-100 last:border-0 last:pb-0 last:mb-0">
@@ -101,6 +144,36 @@ function EmptyState({ icon, title, subtitle }) {
   );
 }
 
+class TabErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <EmptyState
+          icon="fa-circle-info"
+          title="Nothing to show yet"
+          subtitle="This part of the profile is not available."
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function PageSkeleton() {
   return (
     <div className="min-h-screen bg-[#f4f7fe] px-4 py-8">
@@ -122,6 +195,8 @@ const TABS = [
 // Main Page
 export default function DiscoveryStudentProfile() {
   const { id }   = useParams();
+  const [searchParams] = useSearchParams();
+  const kind = searchParams.get('as') === 'record' ? 'record' : 'user';
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
   const { openChat } = useChatHeads();
@@ -130,16 +205,19 @@ export default function DiscoveryStudentProfile() {
   const [loading,   setLoading]   = useState(true);
   const [imgError,  setImgError]  = useState(false);
   const [error,     setError]     = useState(null);
+  const [restricted, setRestricted] = useState(null);
   const [toast,     setToast]     = useState(null);
   const [activeTab, setActiveTab] = useState('profile');
 
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setRestricted(null);
     setImgError(false);
-    discoveryStudentApi.show(id)
+    discoveryStudentApi.show(id, kind)
       .then(({ data }) => {
         const studentData = data.data ?? data;
+        setRestricted(null);
         setStudent(studentData);
 
         // Record view using users.id (not students.id)
@@ -153,9 +231,19 @@ export default function DiscoveryStudentProfile() {
           });
         }
       })
-      .catch(() => setError('Student not found.'))
+      .catch((err) => {
+        const payload = err.response?.data ?? {};
+        if (payload.restricted || ['private', 'batchmates', 'alumni_only'].includes(payload.visibility)) {
+          setRestricted(payload);
+          setStudent(null);
+          setError(null);
+          return;
+        }
+        setRestricted(null);
+        setError('Student not found.');
+      })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, kind]);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -163,6 +251,33 @@ export default function DiscoveryStudentProfile() {
   };
 
   if (loading) return <PageSkeleton />;
+
+  if (restricted) {
+    const visibility = restricted.visibility;
+    const lockedName = restricted.student?.name
+      || [restricted.student?.first_name, restricted.student?.last_name].filter(Boolean).join(' ')
+      || 'This student';
+    const title = visibility === 'batchmates' || visibility === 'alumni_only'
+      ? 'This profile is for batchmates only'
+      : 'This profile is private';
+    const detail = visibility === 'batchmates' || visibility === 'alumni_only'
+      ? `You and ${lockedName} are not in the same batch year. Only students from that graduation year can view this profile.`
+      : 'Only the owner can view this profile. Posts, achievements, and other details stay hidden.';
+
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#f4f7fe] gap-3 px-4 text-center">
+        <i className={`fas ${visibility === 'batchmates' ? 'fa-users' : 'fa-lock'} text-5xl text-slate-200`} />
+        <h2 className="text-lg font-black text-[#1d2b4b] m-0">{title}</h2>
+        <p className="text-sm text-slate-400 m-0 max-w-sm">{detail}</p>
+        <button
+          onClick={() => navigate(-1)}
+          className="bg-transparent border-none text-[#3f51b5] text-sm font-semibold cursor-pointer"
+        >
+          ← Back
+        </button>
+      </div>
+    );
+  }
 
   if (error || !student) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-[#f4f7fe] gap-3 px-4 text-center">
@@ -181,29 +296,33 @@ export default function DiscoveryStudentProfile() {
   // Derived values
   const firstName   = student.first_name  ?? '';
   const lastName    = student.last_name   ?? '';
-  const displayName = `${firstName} ${lastName}`.trim();
+  const displayName = student.name || `${firstName} ${lastName}`.trim();
   const fullName    = student.middle_name
     ? `${firstName} ${student.middle_name} ${lastName}`.trim()
     : displayName;
 
-  const photoSrc      = student.photo_url ?? student.photo ?? null;
+  const photoSrc      = student.photo_url ?? student.photo ?? student.profile_picture ?? null;
   const shortCourse   = COURSE_LABELS[student.course] ?? student.course ?? 'Student';
   const canViewFull   = student.is_premium_viewer === true
     || student.is_subscribed_viewer === true
     || hasPaidAccess(authUser);
-  const honors        = safeArray(student.honors);
-  const organizations = safeArray(student.organizations);
-  const achievements  = safeArray(student.achievements);
+  const honors        = profileList(student.honors);
+  const organizations = profileList(student.organizations);
+  const achievements  = achievementEntries(student);
   const batchYear     = student.graduation_year ?? new Date().getFullYear();
+  const batchLabel    = profileText(student.batch?.name) || (student.graduation_year ? String(student.graduation_year) : '');
+  const sectionLabel  = profileText(student.section?.name);
+  const statusLabel   = profileText(student.academic_status) || 'Current Student';
 
   const hasSocials = student.facebook_url || student.instagram_url
                   || student.linkedin_url  || student.github_url;
 
-  const hasYearbookContent = student.motto        || student.student_quote
-    || student.fondest_memory || student.ambition || student.future_plans
-    || student.most_likely_to;
+  const hasYearbookContent = [
+    student.motto, student.student_quote, student.fondest_memory,
+    student.ambition, student.future_plans, student.most_likely_to,
+  ].some(value => profileText(value));
 
-  const hasMessages = student.message_to_batchmates || student.message_to_parents;
+  const hasMessages = profileText(student.message_to_batchmates) || profileText(student.message_to_parents);
   const messageTargetId = student.user_id ?? null;
   const canMessage = Boolean(
     authUser?.id
@@ -268,6 +387,32 @@ export default function DiscoveryStudentProfile() {
 
     academic: (
       <div className="flex flex-col gap-3">
+        <Section icon="fas fa-graduation-cap" label="Academic Info">
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'Course', value: shortCourse, icon: 'fa-book' },
+              { label: 'Section', value: sectionLabel || 'N/A', icon: 'fa-layer-group' },
+              {
+                label: 'Status',
+                value: statusLabel,
+                icon: statusLabel === 'Alumni' ? 'fa-user-graduate' : 'fa-user',
+                green: statusLabel === 'Alumni',
+              },
+              { label: 'Batch', value: batchLabel || 'N/A', icon: 'fa-users' },
+            ].map(row => (
+              <div key={row.label} className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <i className={`fas ${row.icon} text-[#fdb813] text-[9px]`} />
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{row.label}</span>
+                </div>
+                <p className={`text-sm font-bold m-0 break-words ${row.green ? 'text-emerald-500' : 'text-[#1d2b4b]'}`}>
+                  {row.value}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
         <Section icon="fas fa-medal" label="Honors & Awards">
           {honors.length === 0 ? (
             <EmptyState icon="fa-medal" title="No Honors Yet" subtitle="This student hasn't added any honors yet." />
@@ -305,13 +450,19 @@ export default function DiscoveryStudentProfile() {
             <EmptyState icon="fa-award" title="No Achievements Yet" subtitle="This student hasn't added any achievements yet." />
           ) : (
             achievements.map((a, i, arr) => (
-              <div key={i}
+              <div key={`${a.title}-${i}`}
                 className={`flex items-center gap-4 py-4 ${i < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
                 <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center shrink-0">
                   <i className="fas fa-award text-[#fdb813] text-base" />
                 </div>
-                <p className="text-sm font-bold text-[#1d2b4b] m-0 flex-1">{a}</p>
-                <i className="fas fa-chevron-right text-slate-200 text-xs" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-[#1d2b4b] m-0">{a.title}</p>
+                  {(a.subtitle || a.date) && (
+                    <p className="text-xs text-slate-500 m-0 mt-0.5">
+                      {[a.subtitle, a.date].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                </div>
               </div>
             ))
           )}
@@ -605,6 +756,7 @@ export default function DiscoveryStudentProfile() {
             {TABS.map(tab => (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => setActiveTab(tab.key)}
                 className={`
                   flex items-center gap-2 px-5 py-3.5 text-xs font-bold uppercase tracking-wider
@@ -622,7 +774,11 @@ export default function DiscoveryStudentProfile() {
           </div>
 
           <div className="p-4 animate-[fadeIn_0.2s_ease]" key={activeTab}>
-            {tabContent[activeTab]}
+            <TabErrorBoundary resetKey={activeTab}>
+              {tabContent[activeTab] ?? (
+                <EmptyState icon="fa-circle-info" title="Nothing to show yet" subtitle="This part of the profile is not available." />
+              )}
+            </TabErrorBoundary>
           </div>
         </div>
         ) : (

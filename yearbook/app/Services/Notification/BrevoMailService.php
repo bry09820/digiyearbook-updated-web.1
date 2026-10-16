@@ -35,14 +35,14 @@ class BrevoMailService
             $toName,
             'Your Sinag-Bughaw Verification Code',
             $this->layout('Verification Code', "
-                <p>Use the code below to verify your identity. It expires in <strong>10 minutes</strong>.</p>
+                <p>Use the code below to verify your identity. It expires in <strong>15 minutes</strong>.</p>
                 <div style=\"background:#f1f5f9;border-radius:12px;padding:28px;text-align:center;margin:24px 0\">
                     <div style=\"font-size:44px;font-weight:900;color:#3f51b5;letter-spacing:14px\">{$otp}</div>
                     <div style=\"font-size:12px;color:#94a3b8;margin-top:8px\">One-time verification code</div>
                 </div>
                 <p style=\"font-size:12px;color:#92400e\">Never share this code. NU Lipa staff will never ask for it.</p>
             "),
-            "Your OTP code is: {$otp}. It expires in 10 minutes.",
+            "Your OTP code is: {$otp}. It expires in 15 minutes.",
             'OTP'
         );
     }
@@ -55,14 +55,14 @@ class BrevoMailService
             'Reset Your Sinag-Bughaw Password',
             $this->layout('Reset Your Password', "
                 <p>Hi <strong>" . e($toName) . "</strong>,</p>
-                <p>Use the code below to reset your Sinag-Bughaw password. It expires in <strong>10 minutes</strong>.</p>
+                <p>Use the code below to reset your Sinag-Bughaw password. It expires in <strong>15 minutes</strong>.</p>
                 <div style=\"background:#f1f5f9;border-radius:12px;padding:28px;text-align:center;margin:24px 0\">
                     <div style=\"font-size:44px;font-weight:900;color:#1d2b4b;letter-spacing:14px\">{$otp}</div>
                     <div style=\"font-size:12px;color:#94a3b8;margin-top:8px\">Password reset code</div>
                 </div>
                 <p style=\"font-size:12px;color:#991b1b\">If you did not request this, ignore this email.</p>
             "),
-            "Your password reset code is: {$otp}. It expires in 10 minutes. If you did not request this, ignore this email.",
+            "Your password reset code is: {$otp}. It expires in 15 minutes. If you did not request this, ignore this email.",
             'PasswordReset'
         );
     }

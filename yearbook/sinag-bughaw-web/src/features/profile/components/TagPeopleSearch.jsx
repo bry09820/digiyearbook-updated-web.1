@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { studentsApi } from '@/api/student.api';
+import { profileApi } from '@/api/gallery.api';
 
 export default function TagPeopleSearch({ tagged = [], onTag, onUntag, excludeId }) {
   const [query,   setQuery]   = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [open,    setOpen]    = useState(false);
+  const [searchError, setSearchError] = useState('');
   const debounceRef = useRef(null);
   const wrapperRef  = useRef(null);
 
@@ -15,11 +16,16 @@ export default function TagPeopleSearch({ tagged = [], onTag, onUntag, excludeId
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const { data } = await studentsApi.search({ q: query, per_page: 8 });
+        const { data } = await profileApi.searchClassmates({ q: query, limit: 8 });
         const list = data.data ?? data ?? [];
-        setResults(list.filter(u => u.id !== excludeId));
+        setResults(list.filter(u => String(u.id) !== String(excludeId)));
+        setSearchError('');
         setOpen(true);
-      } catch { setResults([]); }
+      } catch (err) {
+        const status = err.response?.status;
+        setResults([]);
+        setSearchError(err.response?.data?.message || (status ? `Classmate search failed (HTTP ${status}).` : 'Classmate search did not reach the server.'));
+      }
       finally { setLoading(false); }
     }, 350);
     return () => clearTimeout(debounceRef.current);
@@ -72,7 +78,10 @@ export default function TagPeopleSearch({ tagged = [], onTag, onUntag, excludeId
         />
         {loading && <i className="fas fa-spinner animate-spin text-slate-400 text-xs" />}
       </div>
-      {open && !loading && query.trim() && results.length === 0 && (
+      {searchError && (
+        <p className="mt-2 text-[12px] text-red-600">{searchError}</p>
+      )}
+      {open && !loading && !searchError && query.trim() && results.length === 0 && (
         <p className="mt-4 text-center text-[13px] text-slate-400">No classmates found</p>
       )}
 

@@ -29,20 +29,3 @@ export const presenceApi = {
   update: (isOnline) => api.post('/presence',      { is_online: isOnline }),
   bulk:   (userIds)  => api.post('/presence/bulk', { user_ids: userIds }),
 };
-
-export const voiceNotesApi = {
-  inbox:      ()         => api.get('/voice-notes/inbox'),
-  outbox:     ()         => api.get('/voice-notes/outbox'),
-  forProfile: (userId)   => api.get(`/voice-notes/profile/${userId}`),
-  send:       (formData) => api.post('/voice-notes', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }),
-  delete:     (id)       => api.delete(`/voice-notes/${id}`),
-};
-
-export const voiceNoteAdminApi = {
-  list:    (status = 'pending') => api.get('/admin/voice-notes', { params: { status } }),
-  stats:   ()                   => api.get('/admin/voice-notes/stats'),
-  approve: (id)                 => api.post(`/admin/voice-notes/${id}/approve`),
-  reject:  (id, reason)         => api.post(`/admin/voice-notes/${id}/reject`, { reason }),
-};

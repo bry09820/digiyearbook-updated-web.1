@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\Faculty;
+use App\Models\Section;
+use App\Models\Student;
 use App\Support\PlatformSettings;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 
 class AppConfigController extends Controller
 {
@@ -33,7 +37,30 @@ class AppConfigController extends Controller
                     'max_upload_size_mb' => (int) PlatformSettings::get('max_upload_size_mb'),
                     'allowed_file_types' => PlatformSettings::get('allowed_file_types'),
                 ],
+                'stats' => $this->liveStats(),
             ]),
         ]);
+    }
+
+    /**
+     * Public counters for the landing and sign-in panels.
+     * Graduates are yearbook student rows. Photos match the admin gallery total.
+     */
+    private function liveStats(): array
+    {
+        $programs = (int) DB::table('sections')
+            ->whereNull('deleted_at')
+            ->whereNotNull('course')
+            ->where('course', '<>', '')
+            ->selectRaw('COUNT(DISTINCT course) as aggregate')
+            ->value('aggregate');
+
+        return [
+            'graduates' => Student::query()->count(),
+            'programs' => $programs,
+            'photos' => (int) DB::table('photos')->count(),
+            'faculty_members' => Faculty::query()->count(),
+            'sections' => Section::query()->count(),
+        ];
     }
 }

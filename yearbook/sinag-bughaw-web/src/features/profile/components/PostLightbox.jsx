@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { recordContentView } from '@/api/analytics.api';
 
-export default function PostLightbox({ post, initialIdx = 0, onClose }) {
+export default function PostLightbox({ post, initialIdx = 0, onClose, onViewCount }) {
   const [idx,    setIdx]    = useState(initialIdx);
   const [loaded, setLoaded] = useState(false);
   const [animIn, setAnimIn] = useState(false);
@@ -29,8 +29,12 @@ export default function PostLightbox({ post, initialIdx = 0, onClose }) {
       title: post.caption || 'Profile post',
       category: current.resource_type || 'post',
       url: `/profile/${post.user_id ?? post.user?.id ?? ''}`,
+    }).then((data) => {
+      if (Number.isFinite(Number(data?.views_count))) {
+        onViewCount?.(post.id, Number(data.views_count));
+      }
     }).catch(() => {});
-  }, [post?.id]);
+  }, [post?.id, onViewCount]);
 
   const handleClose = useCallback(() => {
     setAnimIn(false);

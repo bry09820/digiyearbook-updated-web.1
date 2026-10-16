@@ -32,6 +32,13 @@ const api = axios.create({
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('auth_token') || localStorage.getItem('sb_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    if (typeof config.headers?.set === 'function') {
+      config.headers.set('Content-Type', false);
+    } else {
+      delete config.headers['Content-Type'];
+    }
+  }
   return config;
 });
 

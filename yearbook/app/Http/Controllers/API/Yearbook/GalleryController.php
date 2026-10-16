@@ -49,38 +49,39 @@ class GalleryController extends Controller
     {
         $viewer = Auth::user();
 
-        $album = Album::with([
-            'photos' => function ($q) use ($viewer) {
-                $this->applyGalleryVisibility($q, $viewer)
-                  ->select([
-                      'id',
-                      'album_id',
-                      'user_id',
-                      'caption',
-                      'status',
-                      'visibility',
-                      'ai_metadata',
-                      'sort_order',
-                      'created_at',
-                  ])
-                  ->orderByDesc('created_at')
-                  ->orderBy('sort_order')
-                  ->with([
-                      'media' => fn ($m) => $m->select([
-                          'id',
-                          'gallery_id',
-                          'file_path',
-                          'public_id',
-                          'resource_type',
-                          'bytes',
-                          'width',
-                          'height',
-                          'sort_order',
-                      ])->orderBy('sort_order'),
-                      'user:id,name,profile_picture',
-                  ]);
-            },
-        ])->findOrFail($id);
+        $album = Album::query()->findOrFail($id);
+
+        $photos = $this->applyGalleryVisibility($album->galleries(), $viewer)
+            ->select([
+                'id',
+                'album_id',
+                'user_id',
+                'caption',
+                'status',
+                'visibility',
+                'ai_metadata',
+                'sort_order',
+                'created_at',
+            ])
+            ->orderByDesc('created_at')
+            ->orderBy('sort_order')
+            ->with([
+                'media' => fn ($m) => $m->select([
+                    'id',
+                    'gallery_id',
+                    'file_path',
+                    'public_id',
+                    'resource_type',
+                    'bytes',
+                    'width',
+                    'height',
+                    'sort_order',
+                ])->orderBy('sort_order'),
+                'user:id,name,profile_picture',
+            ])
+            ->get();
+
+        $album->setRelation('photos', $photos);
 
         // Hoist the first media file_path onto each photo so the frontend
         $album->photos->each(function ($photo) {
@@ -503,11 +504,23 @@ class GalleryController extends Controller
 
             $visibilityQuery->orWhere('user_id', $viewer->id);
 
-            if ($viewer->batch_id) {
-                $visibilityQuery->orWhere(function ($batchmates) use ($viewer) {
+            $viewer->loadMissing('studentRecord');
+            $year = $viewer->resolvedGraduationYear();
+
+            if ($viewer->batch_id || $year) {
+                $visibilityQuery->orWhere(function ($batchmates) use ($viewer, $year) {
                     $batchmates->where('status', 'approved')
                         ->whereIn('visibility', ['friends', 'batchmates'])
-                        ->whereHas('user', fn ($user) => $user->where('batch_id', $viewer->batch_id));
+                        ->whereHas('user', function ($user) use ($viewer, $year) {
+                            $user->where(function ($same) use ($viewer, $year) {
+                                if ($viewer->batch_id) {
+                                    $same->orWhere('batch_id', $viewer->batch_id);
+                                }
+                                if ($year) {
+                                    $same->orWhere(fn ($match) => $match->whereGraduationYear($year));
+                                }
+                            });
+                        });
                 });
             }
         });

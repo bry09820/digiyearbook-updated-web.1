@@ -28,6 +28,7 @@ export default function PostContextMenu({ post, onClose, onDelete, onUpdated }) 
   const [visibility,  setVisibility]  = useState(post?.visibility === 'friends' ? 'batchmates' : (post?.visibility ?? 'public'));
   const [taggedUsers, setTaggedUsers] = useState(uniqueById(post?.tagged_users ?? []));
   const [saving,      setSaving]      = useState(false);
+  const [deleting,    setDeleting]    = useState(false);
   const [error,       setError]       = useState(null);
 
   useEffect(() => {
@@ -56,8 +57,17 @@ export default function PostContextMenu({ post, onClose, onDelete, onUpdated }) 
   };
 
   const confirmDelete = async () => {
-    try { await profileApi.deletePost(post.id); onDelete?.(post.id); onClose(); }
-    catch { setError('Failed to delete post.'); }
+    if (deleting) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await profileApi.deletePost(post.id);
+      onDelete?.(post.id);
+      onClose();
+    } catch (err) {
+      setError(err.response?.data?.message ?? 'Failed to delete post.');
+      setDeleting(false);
+    }
   };
 
   const back = () => { setView('menu'); setError(null); };
@@ -174,14 +184,15 @@ export default function PostContextMenu({ post, onClose, onDelete, onUpdated }) 
                 <div className="w-16 h-16 rounded-full bg-[#FEF2F2] flex items-center justify-center mx-auto mb-4">
                   <i className="fas fa-trash text-[#DC2626] text-2xl" />
                 </div>
-                <h3 className="text-lg font-semibold text-[#1d2b4b] mb-2">Delete this post?</h3>
+                <h3 className="text-lg font-semibold text-[#1d2b4b] mb-2">Are you sure you want to delete this post?</h3>
                 <p className="mx-auto max-w-[320px] text-sm text-slate-400 leading-[1.6] m-0">
-                  This will permanently remove the photo. This action cannot be undone.
+                  This removes the post and its photos. This action cannot be undone.
                 </p>
+                {error && <ErrorMsg msg={error} />}
               </div>
-              <button onClick={confirmDelete}
-                className="w-full h-12 text-[#DC2626] text-[15px] font-semibold bg-transparent hover:bg-red-50 transition-colors cursor-pointer border-x-0 border-t border-b border-[#f0f0f0]">
-                Delete Permanently
+              <button onClick={confirmDelete} disabled={deleting}
+                className="w-full h-12 text-[#DC2626] text-[15px] font-semibold bg-transparent hover:bg-red-50 transition-colors cursor-pointer border-x-0 border-t border-b border-[#f0f0f0] disabled:opacity-60 disabled:cursor-not-allowed">
+                {deleting ? 'Deleting…' : 'Delete Post'}
               </button>
               <button onClick={() => setView('menu')}
                 className="w-full h-12 text-[#1d2b4b]/70 text-[15px] font-medium bg-transparent hover:bg-slate-50 transition-colors cursor-pointer border-none rounded-b-2xl">

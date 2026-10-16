@@ -10,6 +10,7 @@ import Footer from '@/components/layout/Footer';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 import { imageUrl } from '@/utils/imageUrl';
 import { hasPaidAccess } from '@/utils/subscription';
+import { discoveryProfilePath } from '@/utils/studentProfilePath';
 
 // Constants
 
@@ -21,6 +22,27 @@ const VIEW_MODES = [
 ];
 
 // Helpers
+
+function cleanDiscoveryFilter(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  const lowered = text.toLowerCase();
+  if (!text || ['all', 'all programs', 'all courses', 'all schools', 'all departments', 'all years', 'all sections', 'null', 'undefined'].includes(lowered)) {
+    return null;
+  }
+  return text;
+}
+
+function discoveryParams(filters = {}) {
+  const params = {};
+  Object.entries(filters).forEach(([key, value]) => {
+    const cleaned = key === 'year'
+      ? (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null)
+      : cleanDiscoveryFilter(value);
+    if (cleaned != null && cleaned !== '') params[key] = cleaned;
+  });
+  return params;
+}
 
 function studentName(s) {
   if (s.name) return s.name;
@@ -228,7 +250,7 @@ function StudentCard({ student, isPremium, index = 0, isMatched = false, matchSi
 
   return (
     <Link
-      to={`/discover/students/${student.id}`}
+      to={discoveryProfilePath(student)}
       className="no-underline group block"
       style={{ animationDelay: `${index * 0.03}s` }}
     >
@@ -426,24 +448,33 @@ function BatchView({ isPremium, userYear, userCourse }) {
   const { query, setQuery, results, hasQuery } = useFuseSearch(students, STUDENT_FUSE_KEYS);
   const { faceSearching, faceMatches, matchedIds, handleFaceFile, clearFace } = useFaceSearch();
 
-  const load = useCallback(async () => {
+  const requestRef = useRef(0);
+
+  const load = useCallback(async (nextFilters) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
-      const params = {};
-      if (filters.course) params.course = filters.course;
-      if (filters.year)   params.year   = filters.year;
-      const { data } = await batchApi.batchmates(params);
+      const { data } = await batchApi.batchmates(discoveryParams(nextFilters));
+      if (requestId !== requestRef.current) return;
       setStudents(data.data ?? []);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
-  }, [filters]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(filters); }, [filters, load]);
 
   const setFilter = (key, val) => {
-    setFilters(f => ({ ...f, [key]: val }));
     clearFace();
+    setFilters(current => {
+      const next = { ...current };
+      const cleaned = key === 'year'
+        ? (val && Number.isFinite(Number(val)) ? Number(val) : null)
+        : cleanDiscoveryFilter(val);
+      if (cleaned == null || cleaned === '') delete next[key];
+      else next[key] = cleaned;
+      return next;
+    });
   };
 
   const displayed    = matchedIds.size > 0 ? results.filter(s => matchedIds.has(studentUserId(s))) : results;
@@ -562,6 +593,7 @@ function SectionView({ isPremium }) {
 function SchoolView({ isPremium }) {
   const [students,     setStudents]     = useState([]);
   const [pagination,   setPagination]   = useState(null);
+  const [stats,        setStats]        = useState(null);
   const [loading,      setLoading]      = useState(true);
   const [filters,      setFilters]      = useState({});
   const [serverSearch, setServerSearch] = useState('');
@@ -569,18 +601,23 @@ function SchoolView({ isPremium }) {
   const { faceSearching, faceMatches, matchedIds, handleFaceFile, clearFace } = useFaceSearch();
   const debounceRef = useRef(null);
 
+  const requestRef = useRef(0);
+
   const load = useCallback(async (params = {}) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
-      const { data } = await batchApi.wholeSchool(params);
+      const { data } = await batchApi.wholeSchool(discoveryParams(params));
+      if (requestId !== requestRef.current) return;
       setStudents(data.data?.data ?? []);
       setPagination(data.data);
+      setStats(data.stats ?? null);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(filters); }, [filters]);
+  useEffect(() => { load(filters); }, [filters, load]);
 
   const handleSearch = (val) => {
     setServerSearch(val);
@@ -593,7 +630,15 @@ function SchoolView({ isPremium }) {
 
   const setFilter = (key, val) => {
     clearFace();
-    setFilters(f => ({ ...f, [key]: val || undefined }));
+    setFilters(current => {
+      const next = { ...current };
+      const cleaned = key === 'year'
+        ? (val && Number.isFinite(Number(val)) ? Number(val) : null)
+        : cleanDiscoveryFilter(val);
+      if (cleaned == null || cleaned === '') delete next[key];
+      else next[key] = cleaned;
+      return next;
+    });
   };
 
   const loadPage  = (page) => load({ ...filters, page });
@@ -615,9 +660,12 @@ function SchoolView({ isPremium }) {
 
       {!isPremium && <UpgradeBanner />}
 
-      {pagination && (
+      {(stats || pagination) && (
         <p className="text-sm font-medium mb-4 text-slate-500">
-          {pagination.total?.toLocaleString()} student{pagination.total !== 1 ? 's' : ''} in the school
+          {Number(stats?.total_students ?? pagination?.total ?? 0).toLocaleString()} registered student{Number(stats?.total_students ?? pagination?.total ?? 0) !== 1 ? 's' : ''}
+          {stats?.total_sections != null && (
+            <> · {Number(stats.total_sections).toLocaleString()} section{Number(stats.total_sections) !== 1 ? 's' : ''}</>
+          )}
           {!isPremium && <span className="text-slate-400 font-normal"> · Public profiles only</span>}
         </p>
       )}
@@ -687,16 +735,21 @@ function CrossProgramView({ isPremium }) {
   const { query, setQuery, results, hasQuery } = useFuseSearch(allStudents, CROSS_PROGRAM_FUSE_KEYS);
   const { faceSearching, faceMatches, matchedIds, handleFaceFile, clearFace } = useFaceSearch();
 
+  const requestRef = useRef(0);
+
   const load = useCallback(async (params = {}, append = false) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
-      const { data } = await batchApi.crossProgram(params);
+      const { data } = await batchApi.crossProgram(discoveryParams(params));
+      if (requestId !== requestRef.current) return;
       const newStudents = data.data?.data ?? [];
       setAllStudents(prev => append ? [...prev, ...newStudents] : newStudents);
       setStats(data.stats ?? null);
       setHasMore((data.data?.current_page ?? 1) < (data.data?.last_page ?? 1));
       setError(null);
     } catch (err) {
+      if (requestId !== requestRef.current) return;
       setError(err?.response?.data?.message ?? 'Failed to load cross-program students.');
       if (!append) {
         setAllStudents([]);
@@ -704,18 +757,28 @@ function CrossProgramView({ isPremium }) {
       }
       setHasMore(false);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     setPage(1);
-    setAllStudents([]);
     load(filters);
-  }, [filters]);
+  }, [filters, load]);
 
   const loadMore  = () => { const n = page + 1; setPage(n); load({ ...filters, page: n }, true); };
-  const setFilter = (key, val) => { clearFace(); setFilters(f => ({ ...f, [key]: val || undefined })); };
+  const setFilter = (key, val) => {
+    clearFace();
+    setFilters(current => {
+      const next = { ...current };
+      const cleaned = key === 'year'
+        ? (val && Number.isFinite(Number(val)) ? Number(val) : null)
+        : cleanDiscoveryFilter(val);
+      if (cleaned == null || cleaned === '') delete next[key];
+      else next[key] = cleaned;
+      return next;
+    });
+  };
 
   const displayed = matchedIds.size > 0 ? results.filter(s => matchedIds.has(studentUserId(s))) : results;
   const grouped   = displayed.reduce((acc, s) => {
@@ -726,9 +789,10 @@ function CrossProgramView({ isPremium }) {
   }, {});
 
   const statsItems = [
-    { icon: 'fa-users',            val: stats?.total_students?.toLocaleString(), label: 'students from other programs' },
-    { icon: 'fa-book',             val: stats?.total_programs,                   label: 'different programs'           },
-    { icon: 'fa-building-columns', val: stats?.departments?.length,              label: 'schools'                      },
+    { icon: 'fa-users',            val: Number(stats?.total_students ?? 0).toLocaleString(), label: 'registered students' },
+    { icon: 'fa-layer-group',      val: Number(stats?.total_sections ?? 0).toLocaleString(), label: 'sections' },
+    { icon: 'fa-book',             val: Number(stats?.total_programs ?? 0).toLocaleString(), label: 'different programs' },
+    { icon: 'fa-building-columns', val: Number(stats?.departments?.length ?? 0).toLocaleString(), label: 'schools' },
   ];
 
   return (
@@ -785,7 +849,12 @@ function CrossProgramView({ isPremium }) {
         </div>
       ) : (
         <div className="space-y-10">
-          {Object.entries(grouped).map(([course, courseStudents]) => (
+          {Object.entries(grouped).map(([course, courseStudents]) => {
+            const registeredCount = !hasQuery && matchedIds.size === 0
+              ? Number(stats?.programs?.find(program => program.course === course)?.students_count ?? courseStudents.length)
+              : courseStudents.length;
+
+            return (
             <div key={course}>
               <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-[#1d2b4b] text-amber-400 text-[0.8rem] shrink-0">
@@ -796,7 +865,7 @@ function CrossProgramView({ isPremium }) {
                     {COURSE_LABELS[course] ?? course}
                   </h3>
                   <p className="text-xs m-0 text-slate-400 font-normal">
-                    {courseStudents.length} student{courseStudents.length !== 1 ? 's' : ''} · {course}
+                    {registeredCount} student{registeredCount !== 1 ? 's' : ''} · {course}
                   </p>
                 </div>
               </div>
@@ -818,7 +887,8 @@ function CrossProgramView({ isPremium }) {
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

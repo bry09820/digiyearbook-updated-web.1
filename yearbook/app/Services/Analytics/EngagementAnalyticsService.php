@@ -2,32 +2,78 @@
 
 namespace App\Services\Analytics;
 
+use App\Models\Message;
+use App\Models\Photo;
+use App\Models\TaggedPhoto;
 use App\Models\User;
 use App\Models\ContentView;
 use App\Models\ProfileView;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class EngagementAnalyticsService
 {
     public function summary(): array
     {
+        $census = User::accountCensus();
+
         return [
-            'total_students' => User::whereIn('role', ['student', 'alumni'])->count(),
-            'total_photos'   => DB::table('photos')->count(),
-            'total_messages' => DB::table('messages')->count(),
-            'total_tagged'   => DB::table('tagged_photos')->where('status', 'approved')->count(),
+            'total_students'  => $census['total_students'],
+            'total_alumni'    => $census['total_alumni'],
+            'total_users'     => $census['total_users'],
+            'faculty_members' => $census['faculty_members'],
+            'total_photos'    => Photo::query()->count(),
+            'total_messages'  => Message::query()->count(),
+            'total_tagged'    => TaggedPhoto::query()->where('status', 'approved')->count(),
         ];
     }
 
     public function myStats(User $user): array
     {
+        $profileViews = ProfileView::query()
+            ->where('viewed_user_id', $user->id)
+            ->where(function ($view) use ($user) {
+                $view->whereNull('viewer_user_id')
+                    ->orWhere('viewer_user_id', '!=', $user->id);
+            })
+            ->count();
+
+        if ((int) $user->profile_views !== $profileViews) {
+            $user->forceFill(['profile_views' => $profileViews])->saveQuietly();
+        }
+
         return [
-            'profile_views'     => $user->profile_views,
-            'photos_uploaded'   => $user->photos()->count(),
-            'times_tagged'      => $user->taggedPhotos()->where('status', 'approved')->count(),
-            'messages_sent'     => DB::table('messages')->where('sender_id', $user->id)->count(),
-            'messages_received' => DB::table('messages')->where('receiver_id', $user->id)->count(),
+            'profile_views'     => $profileViews,
+            'photos_uploaded'   => Photo::query()->where('user_id', $user->id)->count(),
+            'times_tagged'      => $this->timesTaggedCount($user),
+            'messages_sent'     => Message::query()->where('sender_id', $user->id)->count(),
+            'messages_received' => Message::query()->where('receiver_id', $user->id)->count(),
         ];
+    }
+
+    public function timesTaggedCount(User $user): int
+    {
+        $pivotIds = Schema::hasTable('photo_tags')
+            ? DB::table('photo_tags')->where('user_id', $user->id)->pluck('photo_id')
+            : collect();
+
+        $legacyExtra = TaggedPhoto::query()
+            ->where('user_id', $user->id)
+            ->where(function ($status) {
+                $status->whereNull('status')
+                    ->orWhereNotIn('status', ['rejected', 'declined']);
+            })
+            ->get(['photo_id'])
+            ->filter(function ($tag) use ($pivotIds) {
+                if (! $tag->photo_id) {
+                    return true;
+                }
+
+                return ! $pivotIds->contains(fn ($id) => (int) $id === (int) $tag->photo_id);
+            })
+            ->count();
+
+        return $pivotIds->count() + $legacyExtra;
     }
 
     public function batchmateStats(User $user): array
@@ -36,10 +82,11 @@ class EngagementAnalyticsService
             ->whereIn('role', ['student', 'alumni'])
             ->where('profile_visibility', 'public')
             ->where('id', '!=', $user->id)
-            ->orderByDesc('profile_views')
-            ->take(5)
             ->with('studentRecord:id,course,graduation_year,photo')
-            ->get(['id', 'name', 'profile_picture', 'profile_views', 'student_record_id', 'role'])
+            ->withCount(['profileViews as live_profile_views' => fn ($view) => $this->excludeSelfViews($view)])
+            ->orderByDesc('live_profile_views')
+            ->take(5)
+            ->get()
             ->map(fn($u) => [
                 'id'              => $u->id,
                 'name'            => $u->name,
@@ -48,7 +95,7 @@ class EngagementAnalyticsService
                 'batch'           => $u->batch,
                 'graduation_year' => $u->graduation_year,
                 'role'            => $u->role,
-                'views'           => $u->profile_views,
+                'views'           => (int) $u->live_profile_views,
             ]);
 
         return [
@@ -62,10 +109,11 @@ class EngagementAnalyticsService
         // Use Eloquent + eager-load studentRecord so accessors work.
         return User::whereIn('role', ['student', 'alumni'])
             ->where('profile_visibility', 'public')
-            ->orderByDesc('profile_views')
-            ->take($limit)
             ->with('studentRecord:id,course,graduation_year,photo')
-            ->get(['id', 'name', 'profile_picture', 'profile_views', 'student_record_id', 'role'])
+            ->withCount(['profileViews as live_profile_views' => fn ($view) => $this->excludeSelfViews($view)])
+            ->orderByDesc('live_profile_views')
+            ->take($limit)
+            ->get()
             ->map(fn($u) => [
                 'id'              => $u->id,
                 'name'            => $u->name,
@@ -74,7 +122,7 @@ class EngagementAnalyticsService
                 'batch'           => $u->batch,
                 'graduation_year' => $u->graduation_year,
                 'role'            => $u->role,
-                'views'           => $u->profile_views,
+                'views'           => (int) $u->live_profile_views,
             ])
             ->toArray();
     }
@@ -150,6 +198,10 @@ class EngagementAnalyticsService
     public function weeklyTrend(int $userId, int $days = 30): array
     {
         $rows = ProfileView::where('viewed_user_id', $userId)
+            ->where(function ($view) use ($userId) {
+                $view->whereNull('viewer_user_id')
+                    ->orWhere('viewer_user_id', '!=', $userId);
+            })
             ->where('created_at', '>=', now()->subDays($days))
             ->selectRaw('DATE(created_at) as date, COUNT(*) as views')
             ->groupBy('date')
@@ -164,6 +216,31 @@ class EngagementAnalyticsService
         }
 
         return $filled;
+    }
+
+    public function viewsThisWeek(): int
+    {
+        $profiles = ProfileView::query()
+            ->where('created_at', '>=', now()->subDays(7))
+            ->where(function ($view) {
+                $view->whereNull('viewer_user_id')
+                    ->orWhereColumn('viewer_user_id', '!=', 'viewed_user_id');
+            })
+            ->count();
+
+        $content = ContentView::query()
+            ->where('created_at', '>=', now()->subDays(7))
+            ->count();
+
+        return $profiles + $content;
+    }
+
+    private function excludeSelfViews($query): void
+    {
+        $query->where(function ($view) {
+            $view->whereNull('viewer_user_id')
+                ->orWhereColumn('profile_views.viewer_user_id', '!=', 'profile_views.viewed_user_id');
+        });
     }
 
     public function platformEngagement(): array
@@ -185,7 +262,7 @@ class EngagementAnalyticsService
             ->map(fn ($item) => [
                 ...$item,
                 'type' => 'profile',
-                'url'  => "/profile/{$item['id']}",
+                'url'  => "/students/{$item['id']}",
             ]);
 
         $content = DB::table('content_views')
@@ -217,7 +294,7 @@ class EngagementAnalyticsService
             ->map(function ($item) {
                 $row = (array) $item;
                 $row['type'] = 'profile';
-                $row['url'] = "/profile/{$row['id']}";
+                $row['url'] = "/students/{$row['id']}";
                 return $row;
             });
 
@@ -253,7 +330,7 @@ class EngagementAnalyticsService
         ?string $title = null,
         ?string $category = null,
         ?string $url = null
-    ): void {
+    ): ?int {
         $allowed = [
             'batch',
             'post',
@@ -271,7 +348,11 @@ class EngagementAnalyticsService
         ];
 
         if (! in_array($contentType, $allowed, true)) {
-            return;
+            return null;
+        }
+
+        if ($contentType === 'post') {
+            return $this->recordUniquePostView($contentId, $viewerUserId, $ipAddress, $title, $category, $url);
         }
 
         $alreadyViewed = ContentView::where('content_type', $contentType)
@@ -287,7 +368,7 @@ class EngagementAnalyticsService
             ->exists();
 
         if ($alreadyViewed) {
-            return;
+            return null;
         }
 
         ContentView::create([
@@ -299,6 +380,51 @@ class EngagementAnalyticsService
             'category'       => $category,
             'url'            => $url,
         ]);
+
+        return null;
+    }
+
+    public function recordUniquePostView(
+        int $photoId,
+        ?int $viewerUserId,
+        string $ipAddress,
+        ?string $title = null,
+        ?string $category = null,
+        ?string $url = null
+    ): int {
+        $photo = Photo::query()->find($photoId);
+        if (! $photo) {
+            return 0;
+        }
+
+        if ($viewerUserId && (int) $viewerUserId !== (int) $photo->user_id) {
+            ContentView::firstOrCreate(
+                [
+                    'content_type'   => 'post',
+                    'content_id'     => $photo->id,
+                    'viewer_user_id' => $viewerUserId,
+                ],
+                [
+                    'viewer_ip' => $ipAddress,
+                    'title'     => $title ?: ($photo->caption ?: 'Feed post'),
+                    'category'  => $category ?: $photo->visibility,
+                    'url'       => $url ?: "/students/{$photo->user_id}?post={$photo->id}",
+                ]
+            );
+        }
+
+        $count = (int) ContentView::query()
+            ->where('content_type', 'post')
+            ->where('content_id', $photo->id)
+            ->whereNotNull('viewer_user_id')
+            ->distinct()
+            ->count('viewer_user_id');
+
+        if ((int) $photo->views_count !== $count) {
+            $photo->forceFill(['views_count' => $count])->save();
+        }
+
+        return $count;
     }
 
     private function formatContentViewRow(object $row, string $viewsKey): array

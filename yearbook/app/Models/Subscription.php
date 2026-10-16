@@ -34,6 +34,28 @@ class Subscription extends Model
             && ($this->expires_at === null || $this->expires_at->isFuture());
     }
 
+    public function scopeWithActiveStatus($query)
+    {
+        return $query->where('status', 'active');
+    }
+
+    public function scopePremiumTier($query)
+    {
+        return $query->where(function ($premium) {
+            $premium->where('tier', 'premium')
+                ->orWhere('plan', 'like', 'premium%');
+        });
+    }
+
+    public function scopeStandardTier($query)
+    {
+        return $query->where(function ($tier) {
+            $tier->whereNull('tier')->orWhere('tier', '!=', 'premium');
+        })->where(function ($plan) {
+            $plan->whereNull('plan')->orWhere('plan', 'not like', 'premium%');
+        });
+    }
+
     public function isPremium(): bool
     {
         return $this->isActive() && $this->tier === 'premium';

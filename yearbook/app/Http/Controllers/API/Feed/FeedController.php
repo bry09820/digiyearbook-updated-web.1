@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\API\Feed;
 
 use App\Http\Controllers\Controller;
-use App\Models\ContentView;
 use App\Models\Photo;
 use App\Models\User;
+use App\Services\Analytics\EngagementAnalyticsService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -28,7 +28,7 @@ class FeedController extends Controller
         $query = Photo::query()
             ->with([
                 'user' => function ($q) {
-                    $q->select('id', 'name', 'first_name', 'last_name', 'profile_picture', 'batch_id', 'student_record_id')
+                    $q->select('id', 'name', 'first_name', 'last_name', 'profile_picture', 'profile_visibility', 'graduation_year', 'batch', 'course', 'section_id', 'role', 'is_alumni', 'batch_id', 'student_record_id')
                         ->withCount([
                             'photos as feed_posts_count' => fn ($photo) => $photo->where('status', 'approved'),
                             'taggedPhotos as feed_tagged_count' => fn ($tag) => $tag->where('status', 'approved'),
@@ -39,7 +39,9 @@ class FeedController extends Controller
                 'taggedStudents.studentRecord:id,course,photo',
                 'media',
             ])
-            ->where('status', 'approved');
+            ->where('status', 'approved')
+            ->with('taggedUsers:id,name,first_name,last_name,student_record_id')
+            ->withCount('postViews as unique_views_count');
 
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
@@ -66,29 +68,7 @@ class FeedController extends Controller
             });
         }
 
-        match ($filter) {
-
-            //Public filter
-            'public' => $query->where('visibility', 'public'),
-
-            // Batchmates filter
-            'batchmates' => $query
-                ->where('visibility', 'friends')
-                ->whereHas('user', fn ($q) => $this->constrainBatchmateAuthor($q, $user)),
-
-            // Mine filter 
-            'mine' => $query->where('user_id', $user->id),
-
-            // All filter (default) 
-            default => $query->where(fn ($q) => $q
-                ->where('visibility', 'public')
-                ->orWhere('user_id', $user->id)
-                ->orWhere(fn ($q2) => $q2
-                    ->where('visibility', 'friends')
-                    ->whereHas('user', fn ($q3) => $this->constrainBatchmateAuthor($q3, $user))
-                )
-            ),
-        };
+        $this->applyAudience($query, $user, $filter);
 
         $paginator = $query
             ->orderByDesc('created_at')
@@ -107,7 +87,7 @@ class FeedController extends Controller
         ]);
     }
 
-    public function recordView(Request $request, Photo $photo): JsonResponse
+    public function recordView(Request $request, Photo $photo, EngagementAnalyticsService $analytics): JsonResponse
     {
         $user = $request->user();
 
@@ -115,32 +95,27 @@ class FeedController extends Controller
             abort(404);
         }
 
-        if ($photo->user_id !== $user->id) {
-            ContentView::firstOrCreate(
-                [
-                    'content_type'   => 'post',
-                    'content_id'     => $photo->id,
-                    'viewer_user_id' => $user->id,
-                ],
-                [
-                    'viewer_ip' => $request->ip(),
-                    'title'     => $photo->caption ?: 'Feed post',
-                    'category'  => $photo->visibility,
-                    'url'       => "/students/{$photo->user_id}?post={$photo->id}",
-                ]
-            );
-        }
+        $viewsCount = $analytics->recordUniquePostView(
+            photoId: $photo->id,
+            viewerUserId: $user->id,
+            ipAddress: (string) $request->ip(),
+            title: $photo->caption ?: 'Feed post',
+            category: $photo->visibility,
+            url: "/students/{$photo->user_id}?post={$photo->id}",
+        );
 
         return response()->json([
             'recorded'    => true,
-            'views_count' => ContentView::where('content_type', 'post')
-                ->where('content_id', $photo->id)
-                ->count(),
+            'views_count' => $viewsCount,
         ]);
     }
 
     private function formatPost(Photo $photo, User $authUser): array
     {
+        if (! array_key_exists('unique_views_count', $photo->getAttributes())) {
+            $photo->loadCount('postViews as unique_views_count');
+        }
+
         // Media handling 
         $media = $photo->media->isNotEmpty()
             ? $photo->media->map(fn ($m) => [
@@ -173,7 +148,10 @@ class FeedController extends Controller
             : null;
 
         // Tagged students 
-        $taggedStudents = $photo->taggedStudents->map(fn ($s) => [
+        $taggedStudents = $photo->taggedStudents
+            ->concat($photo->taggedUsers)
+            ->unique('id')
+            ->map(fn ($s) => [
             'id'              => $s->id,
             'name'            => $this->displayName($s),
             'course'          => $s->course,
@@ -185,9 +163,7 @@ class FeedController extends Controller
             'caption'         => $photo->caption,
             'visibility'      => $photo->visibility === 'friends' ? 'batchmates' : $photo->visibility,
             'is_profile_post' => $photo->is_profile_post,
-            'views_count'     => ContentView::where('content_type', 'post')
-                ->where('content_id', $photo->id)
-                ->count(),
+            'views_count'     => (int) ($photo->unique_views_count ?? $photo->views_count ?? 0),
             'time_ago'        => $photo->created_at?->diffForHumans() ?? '',
             'created_at'      => $photo->created_at?->toIso8601String(),
 
@@ -208,91 +184,108 @@ class FeedController extends Controller
             ?: 'Student';
     }
 
-    private function constrainBatchmateAuthor($query, User $viewer): void
+    private function applyAudience($query, User $viewer, string $filter): void
     {
         $viewer->loadMissing('studentRecord');
+        $year = $viewer->resolvedGraduationYear();
 
-        $year      = $viewer->graduation_year;
-        $course    = trim((string) $viewer->course);
-        $sectionId = $viewer->section_id ?: $viewer->studentRecord?->section_id;
+        $query->where(function ($visible) use ($viewer, $filter, $year) {
+            if ($filter === 'mine') {
+                $visible->where('user_id', $viewer->id);
+                return;
+            }
+
+            if ($filter === 'public') {
+                $visible->where(fn ($public) => $this->wherePublicVisibility($public))
+                    ->orWhere('user_id', $viewer->id);
+                return;
+            }
+
+            if ($filter === 'batchmates') {
+                $visible->where('user_id', $viewer->id)
+                    ->orWhere(fn ($friends) => $this->whereBatchmateVisibility($friends, $year));
+                return;
+            }
+
+            $visible->where('user_id', $viewer->id)
+                ->orWhere(fn ($public) => $this->wherePublicVisibility($public))
+                ->orWhere(fn ($friends) => $this->whereBatchmateVisibility($friends, $year))
+                ->orWhere(fn ($tagged) => $this->whereViewerIsTagged($tagged, $viewer));
+        });
+    }
+
+    private function wherePublicVisibility($query): void
+    {
+        $query->where('visibility', 'public')
+            ->orWhereNull('visibility')
+            ->orWhere('visibility', '');
+    }
+
+    private function whereBatchmateVisibility($query, ?int $year): void
+    {
+        $query->whereIn('visibility', ['friends', 'batchmates']);
 
         if (! $year) {
             $query->whereRaw('1 = 0');
             return;
         }
 
-        $query
-            ->where(function ($author) use ($year) {
-                $author
-                    ->where('graduation_year', $year)
-                    ->orWhereHas('studentRecord', fn ($student) =>
-                        $student->where('graduation_year', $year)
-                    );
-            })
-            ->where(function ($author) use ($course, $sectionId) {
-                if ($sectionId) {
-                    $author
-                        ->orWhere('section_id', $sectionId)
-                        ->orWhereHas('studentRecord', fn ($student) =>
-                            $student->where('section_id', $sectionId)
-                        );
-                }
+        $query->whereHas('user', fn ($author) => $author->whereGraduationYear($year));
+    }
 
-                if ($course !== '') {
-                    $author
-                        ->orWhere('course', $course)
-                        ->orWhereHas('studentRecord', fn ($student) =>
-                            $student->where('course', $course)
-                        );
-                }
-
-                if (! $sectionId && $course === '') {
-                    $author->whereRaw('1 = 0');
-                }
-            });
+    private function whereViewerIsTagged($query, User $viewer): void
+    {
+        $query->where(function ($tagged) use ($viewer) {
+            $tagged->whereHas('taggedUsers', fn ($users) => $users->where('users.id', $viewer->id))
+                ->orWhereHas('taggedPhotos', function ($legacy) use ($viewer) {
+                    $legacy->where('user_id', $viewer->id)
+                        ->where(function ($status) {
+                            $status->whereNull('status')
+                                ->orWhereNotIn('status', ['rejected', 'declined']);
+                        });
+                });
+        });
     }
 
     private function canViewPost(Photo $photo, User $viewer): bool
     {
-        if ((int) $photo->user_id === (int) $viewer->id) {
+        if ((int) $photo->user_id === (int) $viewer->id || $this->viewerIsTagged($photo, $viewer)) {
             return true;
         }
 
-        if ($photo->visibility === 'public') {
+        $visibility = $photo->visibility === 'batchmates' ? 'friends' : ($photo->visibility ?: 'public');
+
+        if ($visibility === 'public') {
             return true;
         }
 
-        if ($photo->visibility !== 'friends') {
+        if ($visibility !== 'friends') {
             return false;
         }
 
         $photo->loadMissing('user.studentRecord');
+        $viewer->loadMissing('studentRecord');
 
-        return $photo->user instanceof User && $this->areBatchmates($viewer, $photo->user);
+        return $photo->user instanceof User && $photo->user->sharesBatchYearWith($viewer);
     }
 
-    private function areBatchmates(User $viewer, User $author): bool
+    private function viewerIsTagged(Photo $photo, User $viewer): bool
     {
-        $viewer->loadMissing('studentRecord');
-        $author->loadMissing('studentRecord');
-
-        $viewerYear = $viewer->graduation_year;
-        $authorYear = $author->graduation_year;
-
-        if (! $viewerYear || ! $authorYear || (int) $viewerYear !== (int) $authorYear) {
-            return false;
-        }
-
-        $viewerSection = $viewer->section_id ?: $viewer->studentRecord?->section_id;
-        $authorSection = $author->section_id ?: $author->studentRecord?->section_id;
-
-        if ($viewerSection && $authorSection && (int) $viewerSection === (int) $authorSection) {
+        if ($photo->relationLoaded('taggedUsers') && $photo->taggedUsers->contains('id', $viewer->id)) {
             return true;
         }
 
-        $viewerCourse = trim((string) $viewer->course);
-        $authorCourse = trim((string) $author->course);
+        if ($photo->relationLoaded('taggedStudents') && $photo->taggedStudents->contains('id', $viewer->id)) {
+            return true;
+        }
 
-        return $viewerCourse !== '' && $authorCourse !== '' && strcasecmp($viewerCourse, $authorCourse) === 0;
+        return $photo->taggedUsers()->where('users.id', $viewer->id)->exists()
+            || $photo->taggedPhotos()
+                ->where('user_id', $viewer->id)
+                ->where(function ($status) {
+                    $status->whereNull('status')
+                        ->orWhereNotIn('status', ['rejected', 'declined']);
+                })
+                ->exists();
     }
 }

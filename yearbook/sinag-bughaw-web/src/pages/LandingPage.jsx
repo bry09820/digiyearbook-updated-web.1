@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Footer from '@/components/layout/Footer';
+import { usePlatformStats } from '@/utils/platformStats';
 
 const NAV_LINKS = [
   { to: '/',          label: 'Home'      },
@@ -8,12 +9,6 @@ const NAV_LINKS = [
   { to: '/faculty',   label: 'Faculty'   },
   { to: '/gallery',   label: 'Gallery'   },
   { to: '/sections',  label: 'Sections'  },
-];
-
-const STATS = [
-  { icon: 'fas fa-user-graduate', value: '12,500+', label: 'Graduates' },
-  { icon: 'fas fa-book-open',     value: '35+',     label: 'Programs'  },
-  { icon: 'fas fa-images',        value: '50k+',    label: 'Photos'    },
 ];
 
 const EXPLORE = [
@@ -47,10 +42,11 @@ const FEATURES = [
   { icon: 'fas fa-shield-alt',     title: 'Private & Secure',    desc: 'Your data stays within the NU Lipa community. Privacy-first by design.'  },
   { icon: 'fas fa-mobile-alt',     title: 'Works Everywhere',    desc: 'Seamlessly browse on desktop, tablet, or mobile — always looks great.'    },
   { icon: 'fas fa-sync-alt',       title: 'Always Up to Date',   desc: 'New batches and galleries are added each semester automatically.'           },
-  { icon: 'fas fa-comment-dots',   title: 'Stay Connected',      desc: 'Message classmates and exchange voice notes with the people who matter.'   },
+  { icon: 'fas fa-comment-dots',   title: 'Stay Connected',      desc: 'Message classmates and stay in touch with the people who matter.'   },
 ];
 
 export default function LandingPage() {
+  const stats = usePlatformStats();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled,   setScrolled]   = useState(false);
   const [hideScroll, setHideScroll] = useState(false);
@@ -202,7 +198,7 @@ export default function LandingPage() {
       {/* Stats */}
       <section className="max-w-5xl mx-auto px-5 sm:px-8 w-full -mt-8 relative z-20">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {STATS.map(({ icon, value, label }) => (
+          {stats.map(({ icon, value, label }) => (
             <div key={label} className="bg-white rounded-2xl px-6 py-6 flex items-center gap-4 shadow-xl shadow-slate-200/80 border border-slate-100">
               <div className="w-14 h-14 rounded-xl flex items-center justify-center text-xl shrink-0 bg-amber-400/15 text-[#F5A623]">
                 <i className={icon} />

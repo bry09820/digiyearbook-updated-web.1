@@ -1,8 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '@/api/auth.api';
+import { MAX_BATCH_YEAR, MIN_BATCH_YEAR, YEAR_OPTIONS } from '@/api/batch.api';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import ConsentModal from '../components/ConsentModal';
+
+const TERMS_PDF = '/docs/sinag-bugbaw-terms.pdf';
 
 // Must match backend User::DEPARTMENT_COURSES exactly
 const SCHOOLS = [
@@ -48,10 +51,9 @@ const SCHOOLS = [
   },
 ];
 
-const BATCH_YEARS = Array.from(
-  { length: new Date().getFullYear() + 5 - 1990 + 1 },
-  (_, i) => String(new Date().getFullYear() + 5 - i)
-);
+const BATCH_YEARS = YEAR_OPTIONS
+  .filter((year) => year >= MIN_BATCH_YEAR && year <= MAX_BATCH_YEAR)
+  .map(String);
 
 // Styles
 const INPUT_CLS =
@@ -86,6 +88,7 @@ export default function RegisterPage() {
     email:                 '',
     course:                '',
     graduation_year:       '',
+    account_status:        '',
     batch:                 '',
     password:              '',
     password_confirmation: '',
@@ -103,6 +106,8 @@ export default function RegisterPage() {
   const [otp,         setOtp]         = useState(['', '', '', '', '', '']);
   const [resendTimer, setResendTimer] = useState(0);
   const [showConsent, setShowConsent] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsOpen, setTermsOpen] = useState(false);
   const otpRefs = useRef([]);
 
   useEffect(() => {
@@ -110,6 +115,15 @@ export default function RegisterPage() {
     const t = setTimeout(() => setResendTimer((s) => s - 1), 1000);
     return () => clearTimeout(t);
   }, [resendTimer]);
+
+  useEffect(() => {
+    if (!termsOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setTermsOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [termsOpen]);
 
   // Derived intent from verify state
   // 'graduate' only when yearbook match found; else 'browse'
@@ -180,10 +194,15 @@ export default function RegisterPage() {
     if (!form.email.trim())       newErrors.email      = 'Email is required.';
     if (!form.course)             newErrors.course     = 'Please select a course.';
     if (!form.graduation_year)    newErrors.graduation_year = 'Please select your batch.';
+    if (form.account_status !== 'student' && form.account_status !== 'alumni') {
+      newErrors.account_status = 'Select Current Student or Alumni.';
+    }
     if (!form.password)           newErrors.password   = 'Password is required.';
     if (form.password.length < 8) newErrors.password   = 'At least 8 characters.';
     if (form.password !== form.password_confirmation)
       newErrors.password_confirmation = 'Passwords do not match.';
+    if (!termsAccepted)
+      newErrors.terms_accepted = 'Accept the Terms and Conditions to create an account.';
 
     if (verifyState === 'loading')
       newErrors.student_id = 'Please wait for verification to complete.';
@@ -199,6 +218,7 @@ export default function RegisterPage() {
         ...form,
         intent,
         consent_accepted: true,
+        terms_accepted: termsAccepted,
       });
 
       // No token until OTP is verified. Backend already emailed the code.
@@ -596,11 +616,49 @@ export default function RegisterPage() {
                         className={[fieldCls('graduation_year'), !form.graduation_year ? 'text-slate-400' : ''].join(' ')}
                       >
                         <option value="" disabled>Select your batch year...</option>
-                        {BATCH_YEARS.map((year) => (
+                        {BATCH_YEARS.filter((year) => Number(year) >= 2022 && Number(year) <= MAX_BATCH_YEAR).map((year) => (
                           <option key={year} value={year}>Batch {year}</option>
                         ))}
                       </select>
                       {errors.graduation_year && <p className="text-red-500 text-xs mt-1">{errors.graduation_year}</p>}
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-medium text-[#1d2b4b] mb-2">
+                        I am registering as <span className="text-red-400">*</span>
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {[
+                          { value: 'student', label: 'Current Student', icon: 'fa-user-graduate' },
+                          { value: 'alumni', label: 'Alumni', icon: 'fa-graduation-cap' },
+                        ].map((option) => {
+                          const selected = form.account_status === option.value;
+                          return (
+                            <label
+                              key={option.value}
+                              className={[
+                                'flex items-center gap-2 rounded-xl border px-3 py-3 text-sm font-semibold cursor-pointer transition',
+                                selected
+                                  ? 'border-[#3f51b5] bg-[#3f51b5]/5 text-[#1d2b4b] ring-4 ring-[#3f51b5]/10'
+                                  : 'border-slate-200 bg-white text-slate-600',
+                                errors.account_status ? 'border-red-400' : '',
+                              ].join(' ')}
+                            >
+                              <input
+                                type="radio"
+                                name="account_status"
+                                value={option.value}
+                                checked={selected}
+                                onChange={handleChange}
+                                className="accent-[#3f51b5]"
+                              />
+                              <i className={`fas ${option.icon} text-[#fdb813] text-xs`} />
+                              {option.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {errors.account_status && <p className="text-red-500 text-xs mt-1">{errors.account_status}</p>}
                     </div>
 
                     <div>
@@ -634,9 +692,41 @@ export default function RegisterPage() {
                     </div>
                   </div>
 
+                  <div className="flex items-start gap-2 text-sm text-slate-600">
+                    <input
+                      id="terms-accepted"
+                      type="checkbox"
+                      checked={termsAccepted}
+                      onChange={(e) => {
+                        setTermsAccepted(e.target.checked);
+                        if (e.target.checked) {
+                          setErrors((prev) => ({ ...prev, terms_accepted: undefined }));
+                        }
+                      }}
+                      className="mt-1"
+                    />
+                    <label htmlFor="terms-accepted" className="leading-relaxed">
+                      I agree to the{' '}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setTermsOpen(true);
+                        }}
+                        className="inline cursor-pointer border-none bg-transparent p-0 text-[#3f51b5] font-bold underline underline-offset-2"
+                      >
+                        Terms and Conditions and Privacy Notice
+                      </button>
+                    </label>
+                  </div>
+                  {errors.terms_accepted && (
+                    <p className="text-red-500 text-xs -mt-2">{errors.terms_accepted}</p>
+                  )}
+
                   <button
                     type="submit"
-                    disabled={loading || verifyState === 'loading'}
+                    disabled={loading || verifyState === 'loading' || !termsAccepted}
                     className="w-full bg-[#1d2b4b] hover:bg-[#162038] disabled:opacity-60 text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-lg cursor-pointer border-none text-sm"
                   >
                     {loading
@@ -735,6 +825,58 @@ export default function RegisterPage() {
           </div>
         </div>
       </div>
+
+      {termsOpen && (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="terms-pdf-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 cursor-pointer border-none bg-[#0e1628]/75"
+            aria-label="Close terms and privacy notice"
+            onClick={() => setTermsOpen(false)}
+          />
+          <div className="relative flex h-[min(86vh,820px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-[0_32px_80px_rgba(0,0,0,0.28)]">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <h2 id="terms-pdf-title" className="m-0 text-base font-black text-[#1d2b4b]">
+                Terms and Conditions and Privacy Notice
+              </h2>
+              <button
+                type="button"
+                onClick={() => setTermsOpen(false)}
+                className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-500"
+              >
+                Close
+              </button>
+            </div>
+            <iframe
+              title="Terms and Conditions and Privacy Notice"
+              src={TERMS_PDF}
+              className="min-h-0 w-full flex-1 border-0 bg-slate-100"
+            />
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">
+              <a
+                href={TERMS_PDF}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-bold text-[#3f51b5]"
+              >
+                Open PDF
+              </a>
+              <button
+                type="button"
+                onClick={() => setTermsOpen(false)}
+                className="cursor-pointer rounded-xl border-none bg-[#1d2b4b] px-4 py-2 text-sm font-bold text-white"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

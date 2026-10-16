@@ -2,10 +2,7 @@ import client from './client';
 
 export const profileApi = {
   uploadMedia: (formData, config = {}) =>
-    client.post('/profile/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      ...config,
-    }),
+    client.post('/profile/upload', formData, config),
 
   getPosts: (userId, page = 1) =>
     client.get(`/students/${userId}/posts`, { params: { page } }),

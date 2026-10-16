@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useBatch } from '@/features/batch/hooks/useBatch';
-import { batchApi } from '@/api/batch.api';
+import { batchApi, YEAR_OPTIONS } from '@/api/batch.api';
 import { faceApi } from '@/api/gallery.api';
 import FaceSearchButton from '@/components/ui/FaceSearchButton';
 import { imageUrl } from '@/utils/imageUrl';
@@ -14,9 +14,9 @@ import { recordContentView } from '@/api/analytics.api';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import { directoryProfilePath, discoveryProfilePath } from '@/utils/studentProfilePath';
 
 const CURRENT_YEAR = new Date().getFullYear();
-const YEAR_OPTIONS = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR + 2 - i);
 
 function getInitials(name = '') {
   return name.trim().split(/\s+/).map(w => w[0]?.toUpperCase() || '').slice(0, 2).join('');
@@ -29,11 +29,6 @@ function faceUserId(match) {
 
 function studentUserId(student) {
   const id = Number(student?.account_user_id ?? student?.user_id ?? student?.id);
-  return Number.isFinite(id) && id > 0 ? id : null;
-}
-
-function studentRecordId(student) {
-  const id = Number(student?.student_record_id ?? student?.id);
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
@@ -62,6 +57,89 @@ function normalizeText(value) {
 
 function includesSearch(value, query) {
   return normalizeText(value).includes(query);
+}
+
+const UNASSIGNED_SECTION = '__unassigned';
+
+function isRealSectionName(name) {
+  const value = String(name ?? '').trim();
+  return value !== '' && normalizeText(value) !== 'no section';
+}
+
+function namedSectionEntries(sectionMap) {
+  return Object.entries(sectionMap ?? {}).filter(([name]) => name !== UNASSIGNED_SECTION && isRealSectionName(name));
+}
+
+function studentsInCourse(sectionMap) {
+  return Object.values(sectionMap ?? {}).flat();
+}
+
+function buildSectionDirectory(students, catalog, { year, courseFilter, departmentFilter } = {}) {
+  const groups = {};
+  const touch = (department, course) => {
+    groups[department] ??= {};
+    groups[department][course] ??= {};
+    return groups[department][course];
+  };
+
+  const studentCourses = [...new Set(students.map(student => student.course).filter(Boolean))];
+
+  const courseBucket = (course) => {
+    if (courseFilter && courseMatches(course, courseFilter)) return courseFilter;
+    return studentCourses.find(existing => courseMatches(existing, course)) || course || 'Course';
+  };
+
+  const departmentBucket = (department) => {
+    if (departmentFilter && normalizeText(department) === normalizeText(departmentFilter)) return departmentFilter;
+    return department || 'Department';
+  };
+
+  const visibleCatalog = (catalog ?? []).filter(section => {
+    if (!isRealSectionName(section.name)) return false;
+    if (year && Number(section.batch_year) !== Number(year)) return false;
+    if (departmentFilter && normalizeText(section.department) !== normalizeText(departmentFilter)) return false;
+    if (courseFilter && !courseMatches(section.course, courseFilter)) return false;
+    return true;
+  });
+
+  const namesByCourse = {};
+  visibleCatalog.forEach(section => {
+    const course = courseBucket(section.course);
+    (namesByCourse[course] ??= []).push(section);
+  });
+
+  Object.entries(namesByCourse).forEach(([course, sections]) => {
+    sections.forEach(section => {
+      const department = departmentBucket(section.department);
+      const duplicates = sections.filter(item => item.name === section.name).length > 1;
+      const label = duplicates ? `${section.name} · ${section.batch_year}` : section.name;
+      const bucket = touch(department, course);
+      bucket[label] ??= [];
+    });
+  });
+
+  students.forEach(student => {
+    const department = departmentBucket(student.batch?.department || student.department);
+    const course = courseBucket(student.course);
+    const bucket = touch(department, course);
+    const rawName = student.section?.name || student.section_name;
+    if (!isRealSectionName(rawName)) {
+      bucket[UNASSIGNED_SECTION] ??= [];
+      bucket[UNASSIGNED_SECTION].push(student);
+      return;
+    }
+    const matchKey = Object.keys(bucket).find(key =>
+      key !== UNASSIGNED_SECTION && (
+        normalizeText(key) === normalizeText(rawName)
+        || normalizeText(key).startsWith(`${normalizeText(rawName)} ·`)
+      )
+    );
+    const key = matchKey || String(rawName).trim();
+    bucket[key] ??= [];
+    bucket[key].push(student);
+  });
+
+  return groups;
 }
 
 function courseMatches(studentCourse, selectedCourse) {
@@ -140,7 +218,7 @@ function Chip({ label, active, onClick, count }) {
   return (
     <button
       onClick={onClick}
-      className={`font-bold text-xs px-4 py-2 rounded-xl transition-all whitespace-nowrap border-[1.5px] cursor-pointer inline-flex items-center gap-1.5
+      className={`max-w-full shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border-[1.5px] px-3.5 py-2 text-left text-xs font-bold leading-snug transition-all inline-flex
         ${active
           ? 'bg-[#1d2b4b] text-white border-[#1d2b4b]'
           : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
@@ -258,7 +336,7 @@ function YearbookFilterPill({ year, department, course }) {
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       title={`Open ${year} Yearbook`}
-      className={`inline-flex items-center gap-1.5 px-4 py-[9px] rounded-xl border-none text-[0.72rem] font-extrabold whitespace-nowrap transition-all duration-200
+      className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-xl border-none px-4 py-[9px] text-[0.72rem] font-extrabold transition-all duration-200
         ${hov
           ? 'bg-[#fdb813] text-[#1d2b4b] shadow-[0_4px_14px_rgba(253,184,19,0.3)]'
           : 'bg-[#1d2b4b] text-[#fdb813] shadow-[0_2px_8px_rgba(29,43,75,0.15)]'
@@ -350,7 +428,8 @@ function DepartmentCard({ name, totalStudents, courses, onClick }) {
 
 // Course card (shown at level 1)
 function CourseCard({ name, sections, onClick }) {
-  const totalStudents = Object.values(sections).flat().length;
+  const namedSections = namedSectionEntries(sections);
+  const totalStudents = studentsInCourse(sections).length;
   return (
     <button
       onClick={onClick}
@@ -364,7 +443,7 @@ function CourseCard({ name, sections, onClick }) {
           <div>
             <h3 className="m-0 text-base font-extrabold text-[#3f51b5]">{name}</h3>
             <p className="m-0 text-xs font-bold text-slate-400 mt-0.5">
-              {Object.keys(sections).length} section{Object.keys(sections).length !== 1 ? 's' : ''} · {totalStudents} student{totalStudents !== 1 ? 's' : ''}
+              {namedSections.length} section{namedSections.length !== 1 ? 's' : ''} · {totalStudents} student{totalStudents !== 1 ? 's' : ''}
             </p>
           </div>
         </div>
@@ -376,14 +455,14 @@ function CourseCard({ name, sections, onClick }) {
 
       {/* Section preview */}
       <div className="flex flex-wrap gap-2 mt-3">
-        {Object.keys(sections).slice(0, 6).map(section => (
+        {namedSections.slice(0, 6).map(([section]) => (
           <span key={section} className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-white text-slate-500 border border-slate-200">
             {section}
           </span>
         ))}
-        {Object.keys(sections).length > 6 && (
+        {namedSections.length > 6 && (
           <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-[#3f51b5]">
-            +{Object.keys(sections).length - 6} more
+            +{namedSections.length - 6} more
           </span>
         )}
       </div>
@@ -404,7 +483,7 @@ function SectionCard({ name, students, onClick }) {
             <i className="fas fa-layer-group text-sm" />
           </div>
           <div>
-            <h4 className="m-0 text-sm font-black text-[#1d2b4b]">Section {name}</h4>
+            <h4 className="m-0 text-sm font-black text-[#1d2b4b]">{name}</h4>
             <span className="text-[11px] font-black text-[#3f51b5]">
               {students.length} student{students.length !== 1 ? 's' : ''}
             </span>
@@ -441,11 +520,13 @@ function SectionCard({ name, students, onClick }) {
 
 // Student card
 function StudentCard({ student, activeYear, isMatched, matchData }) {
-  const profileId = studentRecordId(student);
+  const profilePath = student.account_user_id || student.user_id
+    ? directoryProfilePath(student)
+    : discoveryProfilePath(student);
 
   return (
     <Link
-      to={`/discover/students/${profileId}`}
+      to={profilePath}
       className={`relative flex items-center gap-3 rounded-2xl border bg-white p-3 no-underline transition hover:-translate-y-0.5 hover:shadow-md
         ${isMatched ? 'border-[#fdb813]' : 'border-slate-200'}`}
     >
@@ -488,7 +569,7 @@ export default function BatchmatesPage() {
     return ['null', 'undefined', ''].includes(normalized.toLowerCase()) ? null : normalized;
   };
 
-  const { user, batchmates, loading, isPremium, filterMeta, fetchBatchmates } = useBatch();
+  const { user, batchmates, loading, isPremium, filterMeta, directoryStats, catalogSections, fetchBatchmates } = useBatch();
 
   const [search,           setSearch]           = useState('');
   const [courseFilter,     setCourseFilter]     = useState(cleanParam(searchParams.get('course')));
@@ -511,18 +592,19 @@ export default function BatchmatesPage() {
     : 'All Programs';
 
   useEffect(() => {
-    const params = {};
-    if (departmentFilter) params.department = departmentFilter;
-    if (courseFilter)     params.course     = courseFilter;
-    if (yearFilter)       params.year       = yearFilter;
-    fetchBatchmates(params);
+    fetchBatchmates({});
+    const timer = window.setInterval(() => fetchBatchmates({}, { silent: true }), 8000);
+    return () => window.clearInterval(timer);
+  }, [fetchBatchmates]);
+
+  useEffect(() => {
     const next = {};
     if (departmentFilter) next.department = departmentFilter;
     if (courseFilter)     next.course     = courseFilter;
     if (sectionFilter)    next.section    = sectionFilter;
-    if (yearFilter)       next.year       = yearFilter;
+    if (yearFilter)       next.year       = String(yearFilter);
     setSearchParams(next, { replace: true });
-  }, [departmentFilter, courseFilter, sectionFilter, yearFilter]);
+  }, [departmentFilter, courseFilter, sectionFilter, yearFilter, setSearchParams]);
 
   useEffect(() => {
     if (!activeYear) return;
@@ -584,10 +666,11 @@ export default function BatchmatesPage() {
     const selectedCourse          = courseFilter || null;
     const selectedCourseMatch     = !selectedCourse || courseMatches(s.course, selectedCourse);
     const selectedDepartmentMatch = !departmentFilter || normalizeText(studentDepartment) === normalizeText(departmentFilter);
+    const selectedYearMatch       = !yearFilter || Number(s.graduation_year ?? s.batch_year) === Number(yearFilter);
     if (matchedIds.size > 0) {
-      return matchedIds.has(studentUserId(s)) && textMatch && selectedCourseMatch && selectedDepartmentMatch;
+      return matchedIds.has(studentUserId(s)) && textMatch && selectedCourseMatch && selectedDepartmentMatch && selectedYearMatch;
     }
-    return textMatch && selectedCourseMatch && selectedDepartmentMatch;
+    return textMatch && selectedCourseMatch && selectedDepartmentMatch && selectedYearMatch;
   });
 
   // Final filtered with section applied
@@ -597,39 +680,25 @@ export default function BatchmatesPage() {
     return normalizeText(studentSection) === normalizeText(sectionFilter);
   });
 
-  // Full grouped structure
-  const groupedBatchmates = filtered.reduce((groups, student) => {
-    const department = student.batch?.department || student.department || 'Department';
-    const course     = student.course || 'Course';
-    const section    = student.section?.name || student.section_name || 'No Section';
-    groups[department] ??= {};
-    groups[department][course] ??= {};
-    groups[department][course][section] ??= [];
-    groups[department][course][section].push(student);
-    return groups;
-  }, {});
+  const directoryFor = (students) => buildSectionDirectory(students, catalogSections, {
+    year: yearFilter,
+    courseFilter,
+    departmentFilter,
+  });
 
-  // Also need the raw group (without section filter) for section picker
-  const groupedNoSection = baseFiltered.reduce((groups, student) => {
-    const department = student.batch?.department || student.department || 'Department';
-    const course     = student.course || 'Course';
-    const section    = student.section?.name || student.section_name || 'No Section';
-    groups[department] ??= {};
-    groups[department][course] ??= {};
-    groups[department][course][section] ??= [];
-    groups[department][course][section].push(student);
-    return groups;
-  }, {});
+  // Full grouped structure uses admin section names, not a placeholder.
+  const groupedBatchmates = directoryFor(filtered);
+  const groupedNoSection = directoryFor(baseFiltered);
 
   const departmentOptions    = Object.keys(groupedBatchmates);
   const coursesForActiveDept = departmentFilter ? Object.keys(groupedNoSection[departmentFilter] ?? {}) : [];
   const sectionsForActiveCourse = (departmentFilter && courseFilter)
-    ? Object.keys(groupedNoSection[departmentFilter]?.[courseFilter] ?? {})
+    ? namedSectionEntries(groupedNoSection[departmentFilter]?.[courseFilter]).map(([name]) => name)
     : [];
 
   // What to render in main content based on drill level
   const renderContent = () => {
-    if (loading) {
+    if (loading && batchmates.length === 0) {
       return <LoadingSkeleton variant="card" count={6} />;
     }
 
@@ -664,20 +733,33 @@ export default function BatchmatesPage() {
 
     // Level 0 show department cards
     if (drillLevel === 0) {
+      const useSchoolTotals = !searchQuery && matchedIds.size === 0 && !yearFilter && !courseFilter;
+      const departmentCards = useSchoolTotals && directoryStats?.departments?.length
+        ? directoryStats.departments.map(dept => {
+            const courses = groupedBatchmates[dept.department] ?? {};
+            return {
+              name: dept.department,
+              totalStudents: Number(dept.students_count ?? 0),
+              courses,
+            };
+          })
+        : Object.entries(groupedBatchmates).map(([dept, courses]) => ({
+            name: dept,
+            totalStudents: Object.values(courses).flatMap(sections => studentsInCourse(sections)).length,
+            courses,
+          }));
+
       return (
         <div className="space-y-4">
-          {Object.entries(groupedBatchmates).map(([dept, courses]) => {
-            const total = Object.values(courses).flatMap(s => Object.values(s).flat()).length;
-            return (
-              <DepartmentCard
-                key={dept}
-                name={dept}
-                totalStudents={total}
-                courses={courses}
-                onClick={() => setDepartmentFilter(dept)}
-              />
-            );
-          })}
+          {departmentCards.map(dept => (
+            <DepartmentCard
+              key={dept.name}
+              name={dept.name}
+              totalStudents={dept.totalStudents}
+              courses={dept.courses}
+              onClick={() => setDepartmentFilter(dept.name)}
+            />
+          ))}
         </div>
       );
     }
@@ -713,6 +795,23 @@ export default function BatchmatesPage() {
     // Level 2 show section cards for active course
     if (drillLevel === 2) {
       const sectionData = groupedBatchmates[departmentFilter]?.[courseFilter] ?? {};
+      const namedSections = namedSectionEntries(sectionData);
+      if (namedSections.length === 0) {
+        const people = sectionData[UNASSIGNED_SECTION] ?? [];
+        return (
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="m-0 text-xl font-extrabold text-[#3f51b5]">{courseFilter}</h2>
+            <p className="m-0 mt-1 text-xs font-bold text-slate-400">No sections have been created for this course yet.</p>
+            {people.length > 0 && (
+              <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {people.map(student => (
+                  <StudentCard key={student.id} student={student} activeYear={activeYear} isMatched={matchedIds.has(studentUserId(student))} matchData={faceMatches.find(m => studentUserId(m) === studentUserId(student))} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
       return (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center gap-4 mb-6">
@@ -725,7 +824,7 @@ export default function BatchmatesPage() {
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {Object.entries(sectionData).map(([section, students]) => (
+            {namedSections.map(([section, students]) => (
               <SectionCard
                 key={section}
                 name={section}
@@ -748,7 +847,7 @@ export default function BatchmatesPage() {
               <i className="fas fa-layer-group" />
             </div>
             <div>
-              <h2 className="m-0 text-xl font-extrabold text-[#1d2b4b]">Section {sectionFilter}</h2>
+              <h2 className="m-0 text-xl font-extrabold text-[#1d2b4b]">{sectionFilter}</h2>
               <p className="m-0 text-xs font-bold text-slate-400">{courseFilter}</p>
             </div>
           </div>
@@ -803,101 +902,105 @@ export default function BatchmatesPage() {
       </header>
 
       {/* Sticky Filters */}
-      <div className="bg-white px-[8%] py-[18px] shadow-sm border-b border-slate-200 sticky top-0 z-20 flex flex-wrap gap-3 items-center justify-between">
-        {/* Search + face */}
-        <div className="relative min-w-[240px] flex-1 max-w-[320px]">
-          <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search name or student ID…"
-            value={search}
-            onChange={e => { setSearch(e.target.value); clearFace(); }}
-            className={`w-full text-sm font-medium rounded-xl outline-none pl-8 pr-12 py-[10px] bg-[#f8fafc] text-[#1d2b4b] border-[1.5px]
-              ${matchedIds.size > 0 ? 'border-[#fdb813]' : 'border-slate-200'}`}
-          />
-          <FaceSearchButton onFile={handleFaceFile} loading={faceSearching} />
-        </div>
-
-        {/* Drill-down chips row 1: departments */}
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap gap-2 items-center">
-            <Chip
-              label="All Departments"
-              active={!departmentFilter}
-              count={departmentOptions.length || undefined}
-              onClick={resetDrill}
-            />
-            {departmentOptions.map(dept => (
-              <Chip
-                key={dept}
-                label={dept}
-                active={departmentFilter === dept}
-                onClick={() => { setDepartmentFilter(dept); setCourseFilter(null); setSectionFilter(null); clearFace(); }}
+      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white shadow-sm">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-4 sm:px-6 lg:px-[8%]">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[min(100%,240px)] flex-1">
+              <i className="fas fa-search pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search name or student ID…"
+                value={search}
+                onChange={e => { setSearch(e.target.value); clearFace(); }}
+                className={`box-border w-full rounded-xl border-[1.5px] bg-[#f8fafc] py-2.5 pl-9 pr-12 text-sm font-medium text-[#1d2b4b] outline-none
+                  ${matchedIds.size > 0 ? 'border-[#fdb813]' : 'border-slate-200'}`}
               />
-            ))}
+              <FaceSearchButton onFile={handleFaceFile} loading={faceSearching} />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={yearFilter ?? ''}
+                onChange={e => setYearFilter(e.target.value ? Number(e.target.value) : null)}
+                className="h-10 max-w-full shrink-0 cursor-pointer rounded-xl border border-slate-200 bg-[#f1f5f9] px-3 text-xs font-bold text-slate-600 outline-none"
+              >
+                <option value="">All Years</option>
+                {YEAR_OPTIONS.map(y => (
+                  <option key={y} value={y}>Batch {y}</option>
+                ))}
+              </select>
+              <YearbookFilterPill year={yearFilter} department={departmentFilter} course={activeCourse} />
+            </div>
           </div>
 
-          {/* Row 2: courses (only if dept selected) */}
-          {departmentFilter && coursesForActiveDept.length > 0 && (
-            <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Chip
-                label="All Courses"
-                active={!courseFilter}
-                onClick={() => { setCourseFilter(null); setSectionFilter(null); clearFace(); }}
+                label="All Departments"
+                active={!departmentFilter}
+                count={departmentOptions.length || undefined}
+                onClick={resetDrill}
               />
-              {coursesForActiveDept.map(course => (
+              {departmentOptions.map(dept => (
                 <Chip
-                  key={course}
-                  label={course}
-                  active={courseFilter === course}
-                  onClick={() => { setCourseFilter(course); setSectionFilter(null); clearFace(); }}
+                  key={dept}
+                  label={dept}
+                  active={departmentFilter === dept}
+                  onClick={() => { setDepartmentFilter(dept); setCourseFilter(null); setSectionFilter(null); clearFace(); }}
                 />
               ))}
             </div>
-          )}
 
-          {/* Row 3: sections (only if course selected) */}
-          {courseFilter && sectionsForActiveCourse.length > 0 && (
-            <div className="flex flex-wrap gap-2 items-center">
-              <Chip
-                label="All Sections"
-                active={!sectionFilter}
-                onClick={() => { setSectionFilter(null); clearFace(); }}
-              />
-              {sectionsForActiveCourse.map(section => (
+            {departmentFilter && coursesForActiveDept.length > 0 && (
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Chip
-                  key={section}
-                  label={section}
-                  active={sectionFilter === section}
-                  onClick={() => { setSectionFilter(section); clearFace(); }}
+                  label="All Courses"
+                  active={!courseFilter}
+                  onClick={() => { setCourseFilter(null); setSectionFilter(null); clearFace(); }}
                 />
-              ))}
-            </div>
-          )}
-        </div>
+                {coursesForActiveDept.map(course => (
+                  <Chip
+                    key={course}
+                    label={course}
+                    active={courseFilter === course}
+                    onClick={() => { setCourseFilter(course); setSectionFilter(null); clearFace(); }}
+                  />
+                ))}
+              </div>
+            )}
 
-        {/* Year + Yearbook */}
-        <div className="flex items-center gap-2">
-          <select
-            value={yearFilter ?? ''}
-            onChange={e => setYearFilter(e.target.value ? Number(e.target.value) : null)}
-            className="font-bold text-xs px-4 py-2 rounded-xl border-none outline-none bg-[#f1f5f9] text-slate-500 cursor-pointer"
-          >
-            <option value="">All Years</option>
-            {YEAR_OPTIONS.map(y => (
-              <option key={y} value={y}>Batch {y}</option>
-            ))}
-          </select>
-          <YearbookFilterPill year={yearFilter} department={departmentFilter} course={activeCourse} />
+            {courseFilter && sectionsForActiveCourse.length > 0 && (
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Chip
+                  label="All Sections"
+                  active={!sectionFilter}
+                  onClick={() => { setSectionFilter(null); clearFace(); }}
+                />
+                {sectionsForActiveCourse.map(section => (
+                  <Chip
+                    key={section}
+                    label={section}
+                    active={sectionFilter === section}
+                    onClick={() => { setSectionFilter(section); clearFace(); }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Count Pill */}
       {!loading && (
-        <div className="flex justify-center mt-6 relative z-10">
-          <div className="font-bold text-sm flex items-center gap-2 bg-white px-7 py-3 rounded-full shadow-[0_10px_25px_rgba(0,0,0,0.08)] text-slate-600">
+        <div className="relative z-10 mx-4 mt-6 flex justify-center">
+          <div className="flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-full bg-white px-6 py-3 text-center text-sm font-bold text-slate-600 shadow-[0_10px_25px_rgba(0,0,0,0.08)]">
             <i className="fas fa-graduation-cap text-[#fdb813]" />
             {filtered.length} batchmate{filtered.length !== 1 ? 's' : ''} found
+            {directoryStats?.total_students != null && (
+              <span className="text-slate-400 text-[0.75rem]">
+                &nbsp;· {Number(directoryStats.total_students).toLocaleString()} registered
+              </span>
+            )}
             {!isPremium && (
               <span className="text-slate-400 text-[0.75rem]">&nbsp;· Public profiles only</span>
             )}

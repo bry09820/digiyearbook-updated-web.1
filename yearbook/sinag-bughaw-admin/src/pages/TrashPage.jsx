@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import api from "../services/api";
+import api, { notifyAdminAccountsChanged } from "../services/api";
 
 // Design tokens (matches existing admin panel palette)
 const T = {
@@ -19,7 +19,7 @@ const T = {
 
 const TYPE_ORDER = [
   "yearbook","faculty","graduation_album","album",
-  "photo","post_media","voice_note","tagged_photo",
+  "photo","post_media","tagged_photo",
   "batch","section","student",
 ];
 
@@ -177,8 +177,6 @@ function TrashCard({ item, selected, onSelect, onRestore, onForce, busy }) {
     ? "Video"
     : mediaType === "audio"
     ? "Audio"
-    : item.type === "voice_note"
-    ? "Voice Note"
     : item.label;
 
   return (
@@ -412,6 +410,7 @@ export default function TrashPage() {
     setBusy(`${item.type}-${item.id}`);
     try {
       await api.post(`/admin/trash/${item.type}/${item.id}/restore`);
+      if (item.type === "user" || item.type === "faculty" || item.type === "student") notifyAdminAccountsChanged();
       toast(`"${item.title}" restored successfully.`);
       fetchCounts();
       fetchItems(page);
@@ -429,6 +428,7 @@ export default function TrashPage() {
     setBusy(`${item.type}-${item.id}`);
     try {
       await api.delete(`/admin/trash/${item.type}/${item.id}`);
+      if (item.type === "user" || item.type === "faculty" || item.type === "student") notifyAdminAccountsChanged();
       toast(`"${item.title}" permanently deleted.`);
       setConfirm(null);
       fetchCounts();
@@ -450,6 +450,7 @@ export default function TrashPage() {
         const res = await api.post("/admin/trash/bulk-restore", { type, ids });
         total += res.data.restored ?? ids.length;
       }
+      if (groups.user || groups.faculty || groups.student) notifyAdminAccountsChanged();
       toast(`${total} items restored.`);
       fetchCounts();
       fetchItems(page);
@@ -468,6 +469,7 @@ export default function TrashPage() {
         const res = await api.delete("/admin/trash/bulk-force", { data: { type, ids } });
         total += res.data.deleted ?? ids.length;
       }
+      if (groups.user || groups.faculty || groups.student) notifyAdminAccountsChanged();
       toast(`${total} items permanently deleted.`);
       fetchCounts();
       fetchItems(page);

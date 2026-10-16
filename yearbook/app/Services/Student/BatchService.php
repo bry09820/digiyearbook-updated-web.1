@@ -3,10 +3,13 @@
 namespace App\Services\Student;
 
 use App\Models\Batch;
+use App\Models\Section;
 use App\Models\Student;
 use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\LengthAwarePaginator as Paginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class BatchService
 {
@@ -125,6 +128,8 @@ class BatchService
         'HUMSS' => ['HUMSS', 'HUMMS'],
     ];
 
+    private const DEPARTMENT_ORDER = ['SACE', 'SAHS', 'SABM', 'SHS', 'SGS', 'Unassigned'];
+
     // Columns 
 
     private const PUBLIC_COLS = [
@@ -203,8 +208,20 @@ class BatchService
         }
 
         $value = trim($value);
+        $lower = strtolower($value);
+        $openFilters = [
+            'all',
+            'all programs',
+            'all courses',
+            'all schools',
+            'all departments',
+            'all years',
+            'all sections',
+            'null',
+            'undefined',
+        ];
 
-        return $value === '' || strtolower($value) === 'null' || strtolower($value) === 'undefined'
+        return $value === '' || in_array($lower, $openFilters, true)
             ? null
             : $value;
     }
@@ -268,23 +285,75 @@ class BatchService
     // Discovery: Batchmates
     public function getBatchmates(User $viewer, ?string $course = null, ?int $year = null, ?string $department = null): Collection
     {
-        $requestedYear = $year;
         $course     = $this->normalizeFilter($course);
         $department = $this->normalizeFilter($department);
-        $year       = $year ?? $viewer->studentRecord?->graduation_year ?? $viewer->graduation_year;
 
-        if ($course === null && $department === null && $requestedYear === null) {
-            $course = $viewer->studentRecord?->course ?? $viewer->course;
+        if ($year !== null && $year <= 0) {
+            $year = null;
         }
 
-        return $this->baseQuery($viewer->is_premium)
-            ->when($department, fn ($q) => $q->whereIn('students.course', $this->coursesForDepartment($department)))
-            ->when($course, fn ($q) => $this->whereCourseMatches($q, $course))
-            ->when($year,   fn ($q) => $q->where('students.graduation_year', $year))
-            ->orderBy('last_name')
-            ->orderBy('first_name')
+        if ($year !== null && ! Batch::yearAllowed($year)) {
+            return collect();
+        }
+
+        return $this->registeredAccounts()
+            ->when($department, fn (Collection $people) => $people->filter(
+                fn (array $person) => strcasecmp((string) $person['department'], $department) === 0
+            ))
+            ->when($course, fn (Collection $people) => $people->filter(
+                fn (array $person) => $this->sameCourse($person['course'] ?? null, $course)
+            ))
+            ->when($year, fn (Collection $people) => $people->filter(
+                fn (array $person) => (int) ($person['graduation_year'] ?? 0) === $year
+            ))
+            ->sortBy([
+                ['department', 'asc'],
+                ['course', 'asc'],
+                ['name', 'asc'],
+            ])
+            ->values();
+    }
+
+    /**
+     * Section rows created in admin, limited to the campus year range.
+     */
+    public function catalogSections(?string $course = null, ?int $year = null, ?string $department = null): Collection
+    {
+        $course = $this->normalizeFilter($course);
+        $department = $this->normalizeFilter($department);
+
+        if ($year !== null && ! Batch::yearAllowed($year)) {
+            return collect();
+        }
+
+        return Section::query()
+            ->campusYears()
+            ->with('batch:id,name,graduation_year')
+            ->when($department, fn ($query) => $query->where('department', $department))
+            ->when($year, function ($query) use ($year) {
+                $query->where(function ($query) use ($year) {
+                    $query->where('batch_year', $year)
+                        ->orWhereHas('batch', fn ($batch) => $batch->where('graduation_year', $year));
+                });
+            })
+            ->orderBy('name')
             ->get()
-            ->map(fn ($s) => $this->formatStudent($s));
+            ->filter(function (Section $section) use ($course) {
+                $name = trim((string) $section->name);
+
+                return $name !== ''
+                    && strcasecmp($name, 'No Section') !== 0
+                    && ($course === null || $this->sameCourse($section->course, $course));
+            })
+            ->map(fn (Section $section) => [
+                'id' => $section->id,
+                'name' => $section->name,
+                'course' => $section->course,
+                'department' => $section->department,
+                'batch_year' => $section->batch?->graduation_year ?? $section->batch_year,
+                'batch_id' => $section->batch_id,
+            ])
+            ->values();
     }
 
     // Discovery: Sectionmates 
@@ -296,170 +365,605 @@ class BatchService
             return collect();
         }
 
-        return $this->baseQuery($viewer->is_premium)
-            ->where('section_id', $sectionId)
-            ->orderBy('last_name')
-            ->orderBy('first_name')
-            ->get()
-            ->map(fn ($s) => $this->formatStudent($s));
+        return $this->registeredAccounts()
+            ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $sectionId)
+            ->sortBy([
+                ['last_name', 'asc'],
+                ['first_name', 'asc'],
+            ])
+            ->values();
     }
 
     // Discovery: Whole School 
 
     public function getWholeSchool(User $viewer, array $filters = [], int $perPage = 40): LengthAwarePaginator
     {
-        $query = $this->baseQuery($viewer->is_premium);
+        $people = $this->filterRegistered($this->registeredAccounts(), $filters)
+            ->sortBy([
+                ['last_name', 'asc'],
+                ['first_name', 'asc'],
+            ])
+            ->values();
 
-        if (! empty($filters['search'])) {
-            $term = '%' . $filters['search'] . '%';
-            $query->where(fn ($q) => $q
-                ->where('first_name',   'like', $term)
-                ->orWhere('last_name',  'like', $term)
-                ->orWhere('student_no', 'like', $term)
-                ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [$term])
-            );
-        }
-
-        if (! empty($filters['course']))      $this->whereCourseMatches($query, $filters['course']);
-        if (! empty($filters['year']))        $query->where('students.graduation_year', (int) $filters['year']);
-        if (! empty($filters['section_id']))  $query->where('students.section_id',      (int) $filters['section_id']);
-
-        if (! empty($filters['department'])) {
-            $courses = $this->coursesForDepartment($filters['department']);
-            $query->whereIn('students.course', $courses);
-        }
-
-        return $query
-            ->orderBy('last_name')
-            ->orderBy('first_name')
-            ->paginate($perPage)
-            ->through(fn ($s) => $this->formatStudent($s));
+        return $this->paginateRegistered($people, $perPage);
     }
 
     // Discovery: Cross-Program 
 
     public function getCrossProgram(User $viewer, array $filters = [], int $perPage = 40): LengthAwarePaginator
     {
-        $viewerCourse = $viewer->studentRecord?->course ?? $viewer->course;
+        $people = $this->crossProgramAccounts($viewer, $filters)
+            ->sortBy([
+                ['course', 'asc'],
+                ['graduation_year', 'desc'],
+                ['last_name', 'asc'],
+                ['first_name', 'asc'],
+            ])
+            ->values();
 
-        $query = $this->baseQuery($viewer->is_premium)
-            ->when($viewerCourse, fn ($q) => $q->whereNotIn('students.course', $this->courseVariants($viewerCourse)));
-
-        if (! empty($filters['search'])) {
-            $term = '%' . $filters['search'] . '%';
-            $query->where(fn ($q) => $q
-                ->where('first_name',   'like', $term)
-                ->orWhere('last_name',  'like', $term)
-                ->orWhere('student_no', 'like', $term)
-                ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [$term])
-            );
-        }
-
-        if (! empty($filters['course']))     $this->whereCourseMatches($query, $filters['course']);
-        if (! empty($filters['year']))       $query->where('students.graduation_year', (int) $filters['year']);
-
-        if (! empty($filters['department'])) {
-            $courses = $this->coursesForDepartment($filters['department']);
-            $query->whereIn('students.course', $courses);
-        }
-
-        return $query
-            ->orderBy('students.course')
-            ->orderBy('students.graduation_year', 'desc')
-            ->orderBy('last_name')
-            ->orderBy('first_name')
-            ->paginate($perPage)
-            ->through(fn ($s) => $this->formatStudent($s));
+        return $this->paginateRegistered($people, $perPage);
     }
 
     // Discovery: Cross-Program Stats 
 
-    public function getCrossProgramStats(User $viewer): array
+    public function getCrossProgramStats(User $viewer, array $filters = []): array
     {
-        $viewerCourse = $viewer->studentRecord?->course ?? $viewer->course;
+        return $this->summarizeRegistered($this->crossProgramAccounts($viewer, $filters));
+    }
 
-        $base = Student::when($viewerCourse, fn ($q) => $q->whereNotIn('students.course', $this->courseVariants($viewerCourse)));
-
-        return [
-            'total_students' => (clone $base)->count(),
-            'total_programs' => (clone $base)->distinct()->count('students.course'),
-            'departments'    => (clone $base)
-                ->join('batches', 'students.batch_id', '=', 'batches.id')
-                ->distinct()
-                ->pluck('batches.department')
-                ->filter()
-                ->values(),
-        ];
+    public function discoveryStats(array $filters = []): array
+    {
+        return $this->summarizeRegistered(
+            $this->filterRegistered($this->registeredAccounts(), $filters)
+        );
     }
 
     // Discovery: By Department 
 
     public function getByDepartment(User $viewer, string $department): Collection
     {
-        return $this->baseQuery($viewer->is_premium)
-            ->whereIn('students.course', $this->coursesForDepartment($department))
-            ->orderBy('students.course')
-            ->orderBy('last_name')
-            ->get()
-            ->map(fn ($s) => $this->formatStudent($s))
-            ->groupBy('course');
+        return $this->registeredAccounts()
+            ->filter(fn (array $person) => strcasecmp((string) $person['department'], $department) === 0)
+            ->sortBy([
+                ['course', 'asc'],
+                ['name', 'asc'],
+            ])
+            ->groupBy(fn (array $person) => $person['course'] ?: 'Unassigned course');
     }
 
     // Batch Helpers 
     public function getBatchesByDepartment(): Collection
     {
-        return Batch::withCount('students')
-            ->with([
-                'sections:id,batch_id,name,course,department,batch_year',
-                'sections.students' => function ($query) {
-                    $query->select([
-                        'id',
-                        'section_id',
-                        'batch_id',
-                        'first_name',
-                        'last_name',
-                        'student_no',
-                        'course',
-                        'graduation_year',
-                        'photo',
-                    ])->with('userAccount:id,student_record_id');
-                },
-            ])
+        $people = $this->registeredAccounts();
+        $batches = Batch::with([
+            'sections:id,batch_id,name,course,department,batch_year',
+        ])
+            ->campusYears()
             ->orderBy('graduation_year', 'desc')
-            ->get()
-            ->map(function (Batch $batch) {
-                $batch->sections->transform(function ($section) use ($batch) {
-                    $section->students->transform(function (Student $student) use ($section, $batch) {
-                        $student->name = trim("{$student->first_name} {$student->last_name}");
-                        $student->profile_picture = $student->photo_url ?? $student->photo;
-                        $student->account_user_id = $student->userAccount?->id;
-                        $student->user_id = $student->userAccount?->id;
-                        $student->section_name = $section->name;
-                        $student->batch_name = $batch->name;
-                        $student->batch_year = $batch->graduation_year;
-                        $student->department = $batch->department;
+            ->get();
 
-                        return $student;
-                    });
+        $grouped = collect();
 
-                    return $section;
-                });
+        foreach ($batches as $batch) {
+            $departments = $batch->sections
+                ->pluck('department')
+                ->filter(fn ($department) => is_string($department) && trim($department) !== '')
+                ->unique()
+                ->values();
 
-                return $batch;
-            })
+            if ($departments->isEmpty()) {
+                $departments = collect(['Unassigned']);
+            }
+
+            foreach ($departments as $department) {
+                $sections = $batch->sections
+                    ->filter(fn ($section) => (string) $section->department === (string) $department)
+                    ->values();
+
+                $count = $people->filter(function (array $person) use ($batch, $department) {
+                    return (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
+                        && strcasecmp((string) $person['department'], (string) $department) === 0;
+                })->count();
+
+                $grouped->push([
+                    'id' => $batch->id,
+                    'name' => $batch->name,
+                    'course' => $batch->course,
+                    'course_code' => $batch->course_code,
+                    'graduation_year' => $batch->graduation_year,
+                    'department' => $department,
+                    'students_count' => $count,
+                    'sections' => $sections->map(fn ($section) => [
+                        'id' => $section->id,
+                        'batch_id' => $section->batch_id,
+                        'name' => $section->name,
+                        'course' => $section->course,
+                        'department' => $section->department,
+                        'batch_year' => $section->batch_year,
+                        'students_count' => $people->filter(function (array $person) use ($batch, $department, $section) {
+                        return (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
+                            && strcasecmp((string) $person['department'], (string) $department) === 0
+                            && $this->sameCourse($person['course'] ?? null, $section->course);
+                    })->count(),
+                    'students' => $people
+                            ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id)
+                            ->values()
+                            ->all(),
+                    ])->values()->all(),
+                ]);
+            }
+        }
+
+        return $grouped
+            ->sortBy(fn (array $batch) => $this->departmentSortIndex($batch['department']))
             ->groupBy('department');
+    }
+
+    /**
+     * Registered student and alumni accounts, using the same population as the admin dashboard.
+     * Department comes from the assigned section, then from the account or linked student course.
+     */
+    public function registeredAccounts(): Collection
+    {
+        $rows = DB::table('users')
+            ->leftJoin('students', 'users.student_record_id', '=', 'students.id')
+            ->leftJoin('sections as student_sections', 'students.section_id', '=', 'student_sections.id')
+            ->leftJoin('sections as user_sections', 'users.section_id', '=', 'user_sections.id')
+            ->whereIn('users.role', [User::ROLE_STUDENT, User::ROLE_ALUMNI])
+            ->whereNull('users.deleted_at')
+            ->select([
+                'users.id',
+                'users.first_name',
+                'users.last_name',
+                'users.name',
+                'users.role',
+                'users.is_alumni',
+                'users.course as user_course',
+                'users.graduation_year as user_year',
+                'users.profile_picture',
+                'users.avatar',
+                'users.student_id',
+                'users.section_id as user_section_id',
+                'students.id as student_record_id',
+                'students.course as student_course',
+                'students.graduation_year as student_year',
+                'students.photo',
+                'students.student_no',
+                'students.section_id as student_section_id',
+                'student_sections.name as student_section_name',
+                'student_sections.department as student_section_department',
+                'student_sections.course as student_section_course',
+                'user_sections.name as user_section_name',
+                'user_sections.department as user_section_department',
+                'user_sections.course as user_section_course',
+            ])
+            ->get();
+
+        return $rows->map(function ($row) {
+            $course = $this->firstFilled($row->user_course, $row->student_course, $row->student_section_course, $row->user_section_course);
+            $sectionDepartment = $this->knownDepartment($row->student_section_department)
+                ?? $this->knownDepartment($row->user_section_department);
+            $department = $sectionDepartment ?? $this->departmentForCourse($course) ?? 'Unassigned';
+            $graduationYear = $row->user_year ?: $row->student_year;
+            $year = (int) $graduationYear;
+            $isAlumni = (bool) $row->is_alumni
+                || $row->role === User::ROLE_ALUMNI
+                || ($year > 0 && $year <= (int) now()->year);
+            $firstName = trim((string) $row->first_name);
+            $lastName = trim((string) $row->last_name);
+            $name = trim($firstName.' '.$lastName);
+            if ($name === '') {
+                $name = trim((string) $row->name);
+            }
+            if ($firstName === '' && $lastName === '' && $name !== '') {
+                $parts = preg_split('/\s+/', $name, 2) ?: [];
+                $firstName = $parts[0] ?? $name;
+                $lastName = $parts[1] ?? '';
+            }
+
+            return [
+                'id' => (int) $row->id,
+                'account_user_id' => (int) $row->id,
+                'user_id' => (int) $row->id,
+                'student_record_id' => $row->student_record_id ? (int) $row->student_record_id : null,
+                'name' => $name !== '' ? $name : 'Student',
+                'first_name' => $firstName !== '' ? $firstName : null,
+                'last_name' => $lastName !== '' ? $lastName : null,
+                'course' => $course,
+                'department' => $department,
+                'graduation_year' => $graduationYear,
+                'role' => $row->role,
+                'is_alumni' => $isAlumni,
+                'academic_status' => $isAlumni ? 'Alumni' : 'Current Student',
+                'section_id' => $row->student_section_id ?: $row->user_section_id,
+                'section_name' => $row->student_section_name ?: $row->user_section_name,
+                'student_no' => $row->student_no ?: $row->student_id,
+                'student_id' => $row->student_id ?: $row->student_no,
+                'profile_picture' => $row->profile_picture ?: $row->avatar ?: $row->photo,
+            ];
+        })->values();
+    }
+
+    public function directoryTotals(): array
+    {
+        $people = $this->registeredAccounts();
+        $summary = $this->summarizeRegistered($people);
+
+        return [
+            'batches' => $this->visibleBatchCount(),
+            // Section rows in the catalog, not the count of accounts that already have one assigned.
+            'sections' => Section::query()->count(),
+            'students' => $summary['total_students'],
+            'departments' => $summary['departments'],
+        ];
+    }
+
+    /**
+     * Registered student and alumni accounts that match the current discovery filters.
+     */
+    public function filterRegistered(Collection $people, array $filters = []): Collection
+    {
+        $search = $this->normalizeFilter($filters['search'] ?? null);
+        $course = $this->normalizeFilter($filters['course'] ?? null);
+        $department = $this->normalizeFilter($filters['department'] ?? null);
+        $year = is_numeric($filters['year'] ?? null) ? (int) $filters['year'] : null;
+        if ($year !== null && $year <= 0) {
+            $year = null;
+        }
+        $sectionId = ! empty($filters['section_id']) ? (int) $filters['section_id'] : null;
+
+        if ($year !== null && ! Batch::yearAllowed($year)) {
+            return collect();
+        }
+
+        return $people
+            ->when($search, function (Collection $people) use ($search) {
+                $needle = strtolower($search);
+
+                return $people->filter(function (array $person) use ($needle) {
+                    $haystack = strtolower(implode(' ', array_filter([
+                        $person['name'] ?? null,
+                        $person['first_name'] ?? null,
+                        $person['last_name'] ?? null,
+                        $person['student_no'] ?? null,
+                        $person['course'] ?? null,
+                        $person['section_name'] ?? null,
+                    ])));
+
+                    return str_contains($haystack, $needle);
+                });
+            })
+            ->when($course, fn (Collection $people) => $people->filter(
+                fn (array $person) => $this->sameCourse($person['course'] ?? null, $course)
+            ))
+            ->when($year, fn (Collection $people) => $people->filter(
+                fn (array $person) => (int) ($person['graduation_year'] ?? 0) === $year
+            ))
+            ->when($sectionId, fn (Collection $people) => $people->filter(
+                fn (array $person) => (int) ($person['section_id'] ?? 0) === $sectionId
+            ))
+            ->when($department, fn (Collection $people) => $people->filter(
+                fn (array $person) => strcasecmp((string) ($person['department'] ?? ''), $department) === 0
+            ))
+            ->values();
+    }
+
+    public function summarizeRegistered(Collection $people): array
+    {
+        $departments = $people
+            ->countBy('department')
+            ->map(fn ($count, $department) => [
+                'department' => (string) $department,
+                'students_count' => (int) $count,
+            ])
+            ->sortBy(fn (array $row) => $this->departmentSortIndex($row['department']))
+            ->values();
+
+        $programs = $people
+            ->countBy(fn (array $person) => trim((string) ($person['course'] ?? '')) ?: 'Unassigned')
+            ->map(fn ($count, $course) => [
+                'course' => (string) $course,
+                'students_count' => (int) $count,
+            ])
+            ->sortBy('course')
+            ->values();
+
+        return [
+            'total_students' => $people->count(),
+            'total_sections' => $people
+                ->pluck('section_id')
+                ->map(fn ($id) => (int) $id)
+                ->filter(fn (int $id) => $id > 0)
+                ->unique()
+                ->count(),
+            'total_programs' => $programs->count(),
+            'programs' => $programs->all(),
+            'departments' => $departments->all(),
+        ];
+    }
+
+    private function crossProgramAccounts(User $viewer, array $filters = []): Collection
+    {
+        $viewerCourse = $viewer->studentRecord?->course ?? $viewer->course;
+        $people = $this->registeredAccounts();
+
+        if ($viewerCourse) {
+            $people = $people->reject(
+                fn (array $person) => $this->sameCourse($person['course'] ?? null, $viewerCourse)
+            );
+        }
+
+        return $this->filterRegistered($people, $filters);
+    }
+
+    private function paginateRegistered(Collection $people, int $perPage): LengthAwarePaginator
+    {
+        $page = max(1, (int) request()->query('page', 1));
+        $total = $people->count();
+        $items = $people->forPage($page, $perPage)->values();
+
+        return new Paginator(
+            $items,
+            $total,
+            $perPage,
+            $page,
+            ['path' => request()->url(), 'query' => request()->query()]
+        );
+    }
+
+    /**
+     * One record per batch and school, matching the cards on the public batches page.
+     */
+    public function visibleBatchCount(): int
+    {
+        return (int) Batch::query()
+            ->campusYears()
+            ->with('sections:id,batch_id,department')
+            ->get()
+            ->sum(function (Batch $batch) {
+                $departments = $batch->sections
+                    ->pluck('department')
+                    ->map(fn ($department) => trim((string) $department))
+                    ->filter()
+                    ->unique();
+
+                return max(1, $departments->count());
+            });
+    }
+
+    public function departmentStats(): array
+    {
+        return $this->departmentStatsFrom($this->registeredAccounts());
+    }
+
+    private function departmentStatsFrom(Collection $people): array
+    {
+        $counts = $people->countBy('department');
+
+        $departments = DB::table('sections')
+            ->whereNotNull('department')
+            ->where('department', '!=', '')
+            ->distinct()
+            ->pluck('department')
+            ->merge($counts->keys())
+            ->map(fn ($department) => trim((string) $department))
+            ->filter()
+            ->unique()
+            ->sortBy(fn (string $department) => $this->departmentSortIndex($department))
+            ->values()
+            ->map(fn (string $department) => [
+                'department' => $department,
+                'students_count' => (int) ($counts[$department] ?? 0),
+            ])
+            ->values();
+
+        return [
+            'total_students' => $people->count(),
+            'departments' => $departments->all(),
+        ];
+    }
+
+    private function sameCourse(?string $left, ?string $right): bool
+    {
+        $left = trim((string) $left);
+        $right = trim((string) $right);
+        if ($left === '' || $right === '') {
+            return false;
+        }
+
+        $variants = array_map('strtolower', $this->courseVariants($left));
+
+        return in_array(strtolower($right), $variants, true)
+            || in_array(strtolower($left), array_map('strtolower', $this->courseVariants($right)), true);
+    }
+
+    private function departmentForCourse(?string $course): ?string
+    {
+        if ($course === null || trim($course) === '') {
+            return null;
+        }
+
+        $department = self::getDepartment($course);
+
+        return $department === 'General' ? null : $department;
+    }
+
+    private function knownDepartment(mixed $department): ?string
+    {
+        $department = trim((string) $department);
+
+        if ($department === '') {
+            return null;
+        }
+
+        foreach (self::DEPARTMENT_ORDER as $known) {
+            if (strcasecmp($known, $department) === 0) {
+                return $known;
+            }
+        }
+
+        return $department;
+    }
+
+    private function firstFilled(mixed ...$values): ?string
+    {
+        foreach ($values as $value) {
+            $value = trim((string) $value);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function departmentSortIndex(string $department): int
+    {
+        $index = array_search($department, self::DEPARTMENT_ORDER, true);
+
+        return $index === false ? count(self::DEPARTMENT_ORDER) : $index;
+    }
+
+    /**
+     * Create missing batch records for registered accounts in the campus year range.
+     */
+    public function generateBatches(): int
+    {
+        $created = 0;
+        $groups = User::query()
+            ->whereIn('role', [User::ROLE_STUDENT, User::ROLE_ALUMNI])
+            ->whereNull('deleted_at')
+            ->whereNotNull('course')
+            ->where('course', '!=', '')
+            ->whereBetween('graduation_year', [Batch::MIN_YEAR, Batch::maxYear()])
+            ->select('course', 'graduation_year')
+            ->distinct()
+            ->get();
+
+        foreach ($groups as $group) {
+            $year = (int) $group->graduation_year;
+            if (! Batch::yearAllowed($year)) {
+                continue;
+            }
+
+            $exists = Batch::query()
+                ->where('course', $group->course)
+                ->where('graduation_year', $year)
+                ->exists();
+
+            if ($exists) {
+                continue;
+            }
+
+            Batch::create([
+                'name' => self::getCourseCode((string) $group->course).' Batch '.$year,
+                'course' => $group->course,
+                'course_code' => self::getCourseCode((string) $group->course),
+                'graduation_year' => $year,
+                'department' => self::getDepartment((string) $group->course),
+            ]);
+            $created++;
+        }
+
+        return $created;
+    }
+
+    public function assignUsersToBatches(): int
+    {
+        $updated = 0;
+        $users = User::query()
+            ->whereIn('role', [User::ROLE_STUDENT, User::ROLE_ALUMNI])
+            ->whereNull('deleted_at')
+            ->whereBetween('graduation_year', [Batch::MIN_YEAR, Batch::maxYear()])
+            ->whereNotNull('course')
+            ->get();
+
+        foreach ($users as $user) {
+            $year = (int) $user->graduation_year;
+            if (! Batch::yearAllowed($year)) {
+                continue;
+            }
+
+            $batchId = Batch::query()
+                ->campusYears()
+                ->where('graduation_year', $year)
+                ->where(function ($query) use ($user) {
+                    $query->where('course', $user->course)->orWhereNull('course');
+                })
+                ->value('id');
+
+            if ($batchId && (int) $user->batch_id !== (int) $batchId) {
+                $user->forceFill(['batch_id' => $batchId])->save();
+                $updated++;
+            }
+        }
+
+        return $updated;
+    }
+
+    public function generateSections(int $perSection = 40): int
+    {
+        $perSection = max(1, $perSection);
+        $created = 0;
+
+        $batches = Batch::query()->campusYears()->get();
+
+        foreach ($batches as $batch) {
+            $students = Student::query()
+                ->where(function ($query) use ($batch) {
+                    $query->where('batch_id', $batch->id)
+                        ->orWhere(function ($query) use ($batch) {
+                            $query->where('graduation_year', $batch->graduation_year)
+                                ->where('course', $batch->course);
+                        });
+                })
+                ->whereNull('section_id')
+                ->orderBy('last_name')
+                ->orderBy('first_name')
+                ->get();
+
+            foreach ($students->chunk($perSection) as $index => $chunk) {
+                $section = Section::create([
+                    'name' => trim(($batch->course_code ?: 'Section').' '.($index + 1)),
+                    'course' => $batch->course,
+                    'department' => $batch->department,
+                    'batch_year' => $batch->graduation_year,
+                    'batch_id' => $batch->id,
+                ]);
+                Student::query()->whereIn('id', $chunk->pluck('id'))->update([
+                    'section_id' => $section->id,
+                    'batch_id' => $batch->id,
+                ]);
+                $created++;
+            }
+        }
+
+        return $created;
     }
 
     public function getBatchStats(Batch $batch): array
     {
+        $sectionIds = $batch->sections()->pluck('id')->map(fn ($id) => (int) $id);
+        $people = $this->registeredAccounts()
+            ->filter(fn (array $person) => $sectionIds->contains((int) ($person['section_id'] ?? 0)))
+            ->values();
+
         return [
-            'total_students' => $batch->students()->count(),
-            'total_sections' => $batch->sections()->count(),
-            'sections'       => $batch->sections()->withCount('students')->get(['id', 'name']),
-            'by_course'      => $batch->students()
-                ->selectRaw('course, COUNT(*) as count')
-                ->groupBy('course')
-                ->pluck('count', 'course'),
+            'total_students' => $people->count(),
+            'total_sections' => $people
+                ->pluck('section_id')
+                ->map(fn ($id) => (int) $id)
+                ->filter(fn (int $id) => $sectionIds->contains($id))
+                ->unique()
+                ->count(),
+            'sections' => $batch->sections()->get(['id', 'name'])->map(fn ($section) => [
+                'id' => $section->id,
+                'name' => $section->name,
+                'students_count' => $people->filter(
+                    fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                )->count(),
+            ])->values(),
+            'by_course' => $people->countBy(fn (array $person) => $person['course'] ?: 'Unassigned'),
         ];
     }
 

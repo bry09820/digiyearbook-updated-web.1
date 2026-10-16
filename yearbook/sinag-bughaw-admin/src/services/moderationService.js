@@ -23,7 +23,7 @@ const moderationService = {
 
   /**
    * Approve a single item.
-   * @param {string} type  photo|video|voice|tagged|reported
+   * @param {string} type  photo|video|tagged|reported
    * @param {number} id
    */
   approve: (type, id) =>

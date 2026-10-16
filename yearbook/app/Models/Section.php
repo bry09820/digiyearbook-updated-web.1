@@ -52,4 +52,17 @@ class Section extends Model
     {
         return $this->belongsTo(Batch::class);
     }
+
+    public function scopeCampusYears($query)
+    {
+        $min = Batch::MIN_YEAR;
+        $max = Batch::maxYear();
+
+        return $query->where(function ($query) use ($min, $max) {
+            $query->whereHas('batch', fn ($batch) => $batch->whereBetween('graduation_year', [$min, $max]))
+                ->orWhere(function ($query) use ($min, $max) {
+                    $query->whereNull('batch_id')->whereBetween('batch_year', [$min, $max]);
+                });
+        });
+    }
 }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Concerns\AuditsAdminActions;
 use App\Models\AuditLog;
+use App\Models\Batch;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,7 +19,9 @@ class UserManagementController extends Controller
     // GET /api/admin/users
     public function index(Request $request): JsonResponse
     {
-        $query = User::query()->with(['section', 'batchRecord']);
+        User::promoteGraduatedAccounts();
+
+        $query = User::query()->with(['section', 'batchRecord', 'studentRecord']);
 
         if ($search = $request->get('search')) {
             $query->where(function ($q) use ($search) {
@@ -30,7 +33,13 @@ class UserManagementController extends Controller
         }
 
         if ($role = $request->get('role')) {
-            $query->where('role', $role);
+            if ($role === User::ROLE_ALUMNI) {
+                $query->alumni();
+            } elseif ($role === User::ROLE_STUDENT) {
+                $query->currentStudents();
+            } else {
+                $query->where('role', $role);
+            }
         }
 
         if ($status = $request->get('status')) {
@@ -46,7 +55,10 @@ class UserManagementController extends Controller
             ->orderByDesc('created_at')
             ->paginate($request->get('per_page', 15));
 
-        return response()->json($users);
+        $payload = $users->toArray();
+        $payload['summary'] = User::accountCensus();
+
+        return response()->json($payload);
     }
 
     // GET /api/admin/users/{id}
@@ -75,10 +87,22 @@ class UserManagementController extends Controller
             'motto'              => 'sometimes|nullable|string|max:255',
             'course'             => 'sometimes|nullable|string|max:255',
             'batch'              => 'sometimes|nullable|string|max:50',
-            'graduation_year'    => 'sometimes|nullable|integer|min:2000|max:2100',
+            'graduation_year'    => 'sometimes|'.Batch::yearRules(false),
         ]);
 
         $user->update($validated);
+        $user->refresh()->loadMissing('studentRecord');
+        if (array_key_exists('graduation_year', $validated)) {
+            $user->syncIdentityFromGraduationYear();
+        }
+        if (($validated['role'] ?? null) === User::ROLE_ALUMNI) {
+            $user->forceFill([
+                'role' => User::ROLE_ALUMNI,
+                'is_alumni' => true,
+            ])->saveQuietly();
+        } elseif (array_key_exists('role', $validated)) {
+            $user->applyAlumniIdentity();
+        }
 
         $this->audit(
             AuditLog::ACTION_USER_UPDATED,

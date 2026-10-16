@@ -69,11 +69,12 @@ export const profileApi = {
 
   uploadMedia: (formData, onProgress) =>
     client.post('/profile/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: (e) => {
         if (onProgress && e.total) onProgress(Math.round((e.loaded * 100) / e.total));
       },
     }),
+
+  searchClassmates: (params) => client.get('/profile/classmates', { params }),
 
   updatePost: (photoId, payload) =>
     client.patch(`/profile/posts/${photoId}`, payload),

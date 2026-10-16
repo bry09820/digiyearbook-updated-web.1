@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useProfileUpload } from '../hooks/useProfileUpload';
 import TagPeopleSearch from './TagPeopleSearch';
+import { compressImageFile } from '@/utils/compressImage';
 
 const VIS_OPTS = [
   { value: 'public',  icon: 'fa-globe',        label: 'Public'  },
@@ -15,6 +17,47 @@ const TIER_INFO = [
   { label: 'Standard',   icon: 'fa-bolt',  desc: 'HD · up to 10 files',   color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200', highlight: true },
   { label: 'Premium HD', icon: 'fa-crown', desc: '4K · 20 files · 10 GB', color: 'text-amber-600',  bg: 'bg-amber-50',  border: 'border-amber-200',  highlight: true },
 ];
+
+function uploadErrorMessage(err) {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  let serverMessage = '';
+
+  if (data && typeof data === 'object') {
+    const validationErrors = data.errors;
+    const validationText = validationErrors
+      ? Object.entries(validationErrors).map(([field, messages]) => {
+          const text = Array.isArray(messages) ? messages.join(' ') : String(messages);
+          return `${field}: ${text}`;
+        }).join(' ')
+      : '';
+    serverMessage = data.message || validationText;
+  } else if (typeof data === 'string') {
+    const text = data.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (text && !text.startsWith('<')) serverMessage = text.slice(0, 280);
+  }
+
+  const prefix = status ? `HTTP ${status}: ` : '';
+  if (!err?.response) {
+    return 'The upload request did not reach the server. Confirm the app is running, then try again.';
+  }
+  if (status === 413) {
+    return `${prefix}This file is larger than the server upload limit.`;
+  }
+  if (status === 419) {
+    return `${prefix}Your session expired. Refresh the page and sign in again.`;
+  }
+  if (status === 422) {
+    return `${prefix}${serverMessage || 'The server rejected this photo. Check the file type and size.'}`;
+  }
+  if (status === 403) {
+    return `${prefix}${serverMessage || 'You do not have permission to upload this photo.'}`;
+  }
+  if (status >= 500) {
+    return `${prefix}${serverMessage || 'The server failed while saving the photo. See storage/logs/laravel.log.'}`;
+  }
+  return `${prefix}${serverMessage || err.message || 'Upload failed.'}`;
+}
 
 const isMeaningfulText = (value, minLength = 3) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -40,10 +83,13 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
   const MAX_MB    = 50;
 
   const multiRef = useRef();
+  const filesRef = useRef([]);
+  const optimizeJobs = useRef(new Map());
 
   const [files,            setFiles]            = useState([]);
   const [activeIdx,        setActiveIdx]        = useState(0);
   const [uploading,        setUploading]        = useState(false);
+  const [phase,            setPhase]            = useState('idle');
   const [progresses,       setProgresses]       = useState({});
   const [errors,           setErrors]           = useState({});
   const [done,             setDone]             = useState(false);
@@ -52,12 +98,44 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
   const [sharedTags,       setSharedTags]       = useState([]);
   const [perFileCaptions,  setPerFileCaptions]  = useState({});
 
+  filesRef.current = files;
+
   const totalProgress = files.length
     ? Math.round(Object.values(progresses).reduce((a, b) => a + b, 0) / files.length)
     : 0;
 
+  const queueOptimize = (entry) => {
+    if (entry.isVideo) return;
+    setFiles(prev => prev.map(item => item.id === entry.id ? { ...item, optimizing: true } : item));
+    const job = compressImageFile(entry.file)
+      .then((prepared) => {
+        setFiles(prev => prev.map(item => (
+          item.id === entry.id
+            ? { ...item, file: prepared, optimizing: false, optimized: prepared.size < entry.file.size }
+            : item
+        )));
+        return prepared;
+      })
+      .catch(() => {
+        setFiles(prev => prev.map(item => item.id === entry.id ? { ...item, optimizing: false } : item));
+        return entry.file;
+      });
+    optimizeJobs.current.set(entry.id, job);
+  };
+
   const handleFilePick = (e) => {
     const selected = Array.from(e.target.files ?? []);
+    const tooBig   = selected.filter(f => f.size > MAX_MB * 1024 * 1024);
+    if (tooBig.length) {
+      setErrors(prev => {
+        const next = { ...prev };
+        tooBig.forEach(f => {
+          const mb = (f.size / (1024 * 1024)).toFixed(1);
+          next[f.name] = `${f.name} is ${mb} MB, which is over the ${MAX_MB} MB limit.`;
+        });
+        return next;
+      });
+    }
     const valid    = selected.filter(f => f.size <= MAX_MB * 1024 * 1024);
     const entries  = valid.slice(0, MAX_FILES - files.length).map(f => ({
       id:      Math.random().toString(36).slice(2),
@@ -70,10 +148,12 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
       setActiveIdx(merged.length - 1);
       return merged;
     });
+    entries.forEach(queueOptimize);
     e.target.value = '';
   };
 
   const removeFile = (id) => {
+    optimizeJobs.current.delete(id);
     setFiles(prev => {
       const next = prev.filter(f => f.id !== id);
       setActiveIdx(i => Math.max(0, Math.min(i, next.length - 1)));
@@ -94,13 +174,29 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
       });
       return;
     }
-    setUploading(true); setErrors({});
+    setUploading(true);
+    setPhase('preparing');
+    setErrors({});
+    await new Promise((resolve) => { requestAnimationFrame(() => resolve()); });
+
+    const current = filesRef.current;
+    const preparedFiles = [];
+    for (const entry of current) {
+      const job = optimizeJobs.current.get(entry.id);
+      const file = entry.isVideo ? entry.file : await (job ?? compressImageFile(entry.file));
+      preparedFiles.push({ ...entry, file });
+    }
+
+    setPhase('uploading');
     const { profileApi } = await import('@/api/gallery.api');
     const fd = new FormData();
-    files.forEach(entry => fd.append('files[]', entry.file));
+    preparedFiles.forEach(entry => fd.append('files[]', entry.file));
     fd.append('caption',    sharedCaption);
     fd.append('visibility', sharedVisibility);
-    sharedTags.forEach(u => fd.append('tagged_user_ids[]', String(u.id)));
+    sharedTags.forEach(u => {
+      fd.append('tagged_user_ids[]', String(u.id));
+      fd.append('tagged_users[]', String(u.id));
+    });
     try {
       await profileApi.uploadMedia(fd, (pct) => {
         setProgresses(() => {
@@ -113,36 +209,51 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
       setDone(true);
       setTimeout(() => { onSuccess?.(); }, 900);
     } catch (err) {
-      const validationErrors = err.response?.data?.errors;
-      const firstError = validationErrors ? Object.values(validationErrors).flat()[0] : null;
-      const msg = firstError || err.response?.data?.message || 'Upload failed.';
+      const msg = uploadErrorMessage(err);
       setErrors(() => { const e = {}; files.forEach(f => { e[f.id] = msg; }); return e; });
-    } finally { setUploading(false); }
+    } finally {
+      setUploading(false);
+      setPhase('idle');
+    }
   };
 
-  return (
+  return createPortal(
     <>
       <style>{`
-        @keyframes backdropIn { from{opacity:0} to{opacity:1} }
-        @keyframes modalSlide { from{opacity:0;transform:translate(-50%,-46%) scale(0.96)} to{opacity:1;transform:translate(-50%,-50%) scale(1)} }
-        @keyframes successPop { 0%{transform:translate(-50%,-50%) scale(0.9);opacity:0} 60%{transform:translate(-50%,-50%) scale(1.04)} 100%{transform:translate(-50%,-50%) scale(1);opacity:1} }
-        @keyframes spin { to{transform:rotate(360deg)} }
+        @keyframes backdropIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes modalIn {
+          from { opacity: 0; transform: scale(0.96); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes successPop {
+          0% { opacity: 0; transform: scale(0.96); }
+          60% { opacity: 1; transform: scale(1.03); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .upload-strip::-webkit-scrollbar { height: 3px; }
         .upload-strip::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 99px; }
         .upload-strip::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
       `}</style>
 
-      {/* Backdrop */}
+      <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4">
       <div
         onClick={!uploading ? onClose : undefined}
-        className="fixed inset-0 z-[1100] bg-[#0a101e]/72 backdrop-blur-md animate-[backdropIn_0.2s_ease]"
+        className="absolute inset-0 bg-[#0a101e]/72 backdrop-blur-md"
+        style={{ animation: 'backdropIn 0.2s ease both' }}
       />
 
-      {/* Modal */}
       <div
-        className="fixed left-1/2 top-1/2 z-[1101] w-[calc(100%-2rem)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl
-                   shadow-2xl overflow-hidden"
-        style={{ animation: done ? 'successPop 0.3s ease' : 'modalSlide 0.25s cubic-bezier(0.34,1.3,0.64,1)' }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Share Memories"
+        className="relative z-[1] w-full max-w-[480px] bg-white rounded-2xl shadow-2xl overflow-hidden"
+        style={{
+          transformOrigin: 'center center',
+          animation: done
+            ? 'successPop 0.28s ease both'
+            : 'modalIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both',
+        }}
       >
         {/* Header */}
         <div className="bg-gradient-to-r from-[#111827] to-[#1e2d4f] px-4 py-3 flex items-center justify-between">
@@ -261,6 +372,11 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
                         {f.isVideo
                           ? <video src={f.url} className="w-full h-full object-cover" muted />
                           : <img   src={f.url} alt="" className="w-full h-full object-cover" />}
+                        {f.optimizing && (
+                          <div className="absolute inset-0 bg-black/45 flex items-center justify-center">
+                            <i className="fas fa-spinner animate-spin text-white text-[10px]" aria-hidden="true" />
+                          </div>
+                        )}
 
                         {/* Progress overlay */}
                         {progresses[f.id] != null && progresses[f.id] < 100 && (
@@ -358,7 +474,7 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
                 <TagPeopleSearch
                   tagged={sharedTags}
                   onTag={u  => setSharedTags(prev => [...prev.filter(x => x.id !== u.id), u])}
-                  onUntag={u => setSharedTags(prev => prev.filter(x => x.id !== u.id))}
+                  onUntag={id => setSharedTags(prev => prev.filter(x => String(x.id) !== String(id?.id ?? id)))}
                   excludeId={authUser?.id}
                 />
               </div>
@@ -382,9 +498,13 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
 
               {/* Errors */}
               {Object.keys(errors).length > 0 && (
-                <div className="mb-3 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 flex items-center gap-2">
-                  <i className="fas fa-circle-exclamation shrink-0" />
-                  {Object.keys(errors).length} file{Object.keys(errors).length > 1 ? 's' : ''} failed. Check your connection and try again.
+                <div className="mb-3 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 flex flex-col gap-1">
+                  {Object.entries(errors).map(([id, message]) => (
+                    <div key={id} className="flex items-start gap-2">
+                      <i className="fas fa-circle-exclamation shrink-0 mt-0.5" />
+                      <span>{message}</span>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -392,13 +512,17 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
               {uploading && (
                 <div className="mb-4">
                   <div className="flex justify-between text-[10px] text-slate-500 font-semibold mb-1.5">
-                    <span>Uploading {files.length} file{files.length > 1 ? 's' : ''}…</span>
-                    <span>{totalProgress}%</span>
+                    <span>
+                      {phase === 'preparing'
+                        ? `Preparing ${files.length} photo${files.length > 1 ? 's' : ''}…`
+                        : `Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`}
+                    </span>
+                    <span>{phase === 'preparing' ? '…' : `${totalProgress}%`}</span>
                   </div>
                   <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-[#1d2b4b] to-[#3f51b5] rounded-full transition-all duration-300"
-                      style={{ width: `${totalProgress}%` }}
+                      className={`h-full bg-gradient-to-r from-[#1d2b4b] to-[#3f51b5] rounded-full transition-all duration-300 ${phase === 'preparing' ? 'animate-pulse' : ''}`}
+                      style={{ width: phase === 'preparing' ? '35%' : `${totalProgress}%` }}
                     />
                   </div>
                 </div>
@@ -425,7 +549,7 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
                                 : 'bg-gradient-to-r from-[#1d2b4b] to-[#2d4270] text-white hover:opacity-90'}`}
                 >
                   {uploading
-                    ? <><i className="fas fa-spinner animate-spin" /> Uploading {files.length} file{files.length > 1 ? 's' : ''}…</>
+                    ? <><i className="fas fa-spinner animate-spin" /> {phase === 'preparing' ? 'Preparing photos…' : `Uploading ${totalProgress}%`}</>
                     : <><i className={`fas fa-cloud-arrow-up ${files.length ? 'text-[#fdb813]' : 'text-slate-400'}`} />
                        Post {files.length > 0 ? `${files.length} Photo${files.length > 1 ? 's' : ''}` : 'to Profile'}</>
                   }
@@ -435,6 +559,8 @@ export default function ProfileUploadModal({ onClose, onSuccess }) {
           )}
         </div>
       </div>
-    </>
+      </div>
+    </>,
+    document.body,
   );
 }

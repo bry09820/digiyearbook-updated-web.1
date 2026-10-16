@@ -47,11 +47,11 @@ class FacultyController extends Controller
         $search = $request->query('search');
 
         $faculty = Faculty::query()
-            ->when($search, fn ($q) => $q
-                ->where('name', 'like', "%{$search}%")
-                ->orWhere('title', 'like', "%{$search}%")
-                ->orWhere('department', 'like', "%{$search}%")
-            )
+            ->when($search, fn ($q) => $q->where(function ($match) use ($search) {
+                $match->where('name', 'like', "%{$search}%")
+                    ->orWhere('title', 'like', "%{$search}%")
+                    ->orWhere('department', 'like', "%{$search}%");
+            }))
             ->orderBy('department')
             ->orderBy('name')
             ->get();
@@ -69,7 +69,25 @@ class FacultyController extends Controller
             ])
             ->values();
 
-        return response()->json(['data' => $groups]);
+        return response()->json([
+            'data' => $groups,
+            'total_faculty' => Faculty::query()->count(),
+            'matched' => $faculty->count(),
+        ]);
+    }
+
+    public function census()
+    {
+        $accounts = \App\Models\User::accountCensus();
+
+        return response()->json([
+            'total_users' => $accounts['total_users'],
+            'total_students' => $accounts['total_students'],
+            'total_alumni' => $accounts['total_alumni'],
+            'faculty_members' => $accounts['faculty_members'],
+            'verified_users' => $accounts['verified_users'],
+            'unverified_users' => $accounts['unverified_users'],
+        ]);
     }
 
     public function show(int $id)

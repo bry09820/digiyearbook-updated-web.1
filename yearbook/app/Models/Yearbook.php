@@ -22,6 +22,7 @@ class Yearbook extends Model
         'cover_image',
         'description',
         'is_active',
+        'download_count',
     ];
 
     protected function casts(): array

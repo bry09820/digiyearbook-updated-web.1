@@ -96,7 +96,12 @@ export default function MessageModal({
   const [localMinimized, setLocalMinimized] = useState(false);
 
   const inputRef = useRef(null);
-  const bottomRef = useRef(null);
+  const listRef = useRef(null);
+  const stickToBottomRef = useRef(true);
+  const messagesRef = useRef([]);
+  const didInitialLoadRef = useRef(false);
+  const loadedRecipientRef = useRef(null);
+  messagesRef.current = messages;
   const typingTimerRef = useRef(null);
   const iAmTypingRef = useRef(false);
   const recipientId = resolveRecipientId(student);
@@ -113,18 +118,33 @@ export default function MessageModal({
     setLocalMinimized(value);
   }, [controlled, minimized, onMinimize, onExpand]);
 
-  const loadThread = useCallback(async () => {
+  const loadThread = useCallback(async ({ replace = false } = {}) => {
     if (!recipientId) return;
-    setLoading(true);
-    setError('');
+    const showSkeleton = replace && !didInitialLoadRef.current && messagesRef.current.length === 0;
+    if (showSkeleton) setLoading(true);
     try {
-      try { await messagesApi.start(recipientId); } catch { /* thread still loads empty */ }
+      if (replace) {
+        try { await messagesApi.start(recipientId); } catch { /* thread still loads empty */ }
+      }
       const { data } = await api.get(`/messages/${recipientId}`);
-      setMessages(Array.isArray(data) ? data : (data.data ?? []));
+      const next = Array.isArray(data) ? data : (data.data ?? []);
+      setMessages((prev) => {
+        if (!replace) {
+          const known = new Set(prev.map((message) => String(message.id)));
+          const fresh = next.filter((message) => !known.has(String(message.id)));
+          if (!fresh.length) return prev;
+          return [...prev, ...fresh];
+        }
+        const pending = prev.filter((message) => message._pending && !next.some((item) => String(item.id) === String(message.id)));
+        return pending.length ? [...next, ...pending] : next;
+      });
     } catch {
-      setError('Could not load messages.');
+      if (replace) setError('Could not load messages.');
     } finally {
-      setLoading(false);
+      if (showSkeleton) {
+        didInitialLoadRef.current = true;
+        setLoading(false);
+      }
     }
   }, [recipientId]);
 
@@ -136,11 +156,14 @@ export default function MessageModal({
       return;
     }
 
+    if (loadedRecipientRef.current === String(recipientId ?? '')) return;
+    loadedRecipientRef.current = String(recipientId ?? '');
     setInput('');
     setError('');
+    stickToBottomRef.current = true;
     if (!controlled) setLocalMinimized(false);
     setIsTyping(false);
-    loadThread();
+    loadThread({ replace: true });
   }, [isOpen, recipientId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -151,7 +174,7 @@ export default function MessageModal({
 
   useEffect(() => {
     if (!isOpen || !recipientId) return undefined;
-    const timer = setInterval(() => { loadThread(); }, 4000);
+    const timer = setInterval(() => { loadThread({ replace: false }); }, 8000);
     return () => clearInterval(timer);
   }, [isOpen, recipientId, loadThread]);
 
@@ -186,7 +209,9 @@ export default function MessageModal({
   }, [isOpen, authUser?.id, recipientId, minimized, onIncomingWhileMinimized, docked]);
 
   useEffect(() => {
-    if (!minimized) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const list = listRef.current;
+    if (!list || minimized || !stickToBottomRef.current) return;
+    list.scrollTop = list.scrollHeight;
   }, [messages, isTyping, minimized]);
 
   useEffect(() => {
@@ -236,6 +261,7 @@ export default function MessageModal({
       api.post('/messages/typing', { receiver_id: recipientId, is_typing: false }).catch(() => {});
     }
     const tempId = `temp_${Date.now()}`;
+    stickToBottomRef.current = true;
     setMessages((prev) => [...prev, {
       id: tempId,
       sender_id: authUser?.id,
@@ -318,7 +344,15 @@ export default function MessageModal({
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto bg-[#f4f6fa] px-3 py-3.5">
+        <div
+          ref={listRef}
+          onScroll={() => {
+            const list = listRef.current;
+            if (!list) return;
+            stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 64;
+          }}
+          className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto bg-[#f4f6fa] px-3 py-3.5"
+        >
           {!recipientId && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
               <p className="m-0 text-sm font-bold text-[#1d2b4b]">Messaging unavailable</p>
@@ -326,7 +360,7 @@ export default function MessageModal({
             </div>
           )}
 
-          {recipientId && loading && (
+          {recipientId && loading && messages.length === 0 && (
             <div className="flex-1 pt-3">
               <LoadingSkeleton variant="row" count={4} gridClassName="space-y-3" />
             </div>
@@ -342,7 +376,7 @@ export default function MessageModal({
             </div>
           )}
 
-          {recipientId && !loading && messages.map((msg) => {
+          {recipientId && messages.length > 0 && messages.map((msg) => {
             const isMe = String(msg.sender_id) === String(authUser?.id);
             return (
               <div key={msg.id}>
@@ -379,7 +413,6 @@ export default function MessageModal({
               </button>
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
 
         <div className="flex shrink-0 items-end gap-2 border-t border-slate-200 bg-white px-3 py-2.5">

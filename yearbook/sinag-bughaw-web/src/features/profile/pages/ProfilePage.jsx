@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { studentsApi } from '@/api/student.api';
 import { profileApi } from '@/api/gallery.api';
-import { voiceNotesApi } from '@/api/messaging.api';
 import { storageUrl } from '@/api/client';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import Navbar from '@/components/layout/Navbar';
@@ -18,9 +17,10 @@ import { useAppConfig } from '@/features/platform/AppConfigProvider';
 import { getCourseShort } from '@/utils/courseShort';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 import { getSubscriptionTier } from '@/utils/subscription';
+import { academicStatusLabel, isAlumniAccount } from '@/utils/academicStatus';
 
 // Helpers
-const isGraduate = (student) => !!student?.graduation_year;
+const isGraduate = (student) => isAlumniAccount(student);
 const getTier = (u) => getSubscriptionTier(u);
 const isMeaningfulText = (value, minLength = 10) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -46,7 +46,7 @@ const TIER_CONFIG = {
   standard: { label: 'Standard', icon: 'fa-bolt',   cls: 'bg-indigo-50 text-indigo-700 border border-indigo-200' },
   free:     { label: 'Free',     icon: 'fa-user',   cls: 'bg-slate-100 text-slate-500 border border-slate-200'   },
 };
-const PROFILE_TABS = new Set(['posts', 'tagged', 'academic', 'achievements', 'voicenotes']);
+const PROFILE_TABS = new Set(['posts', 'tagged', 'academic', 'achievements', 'yearbook']);
 
 // Sub-components
 function TabCard({ icon, label, action, children }) {
@@ -236,7 +236,6 @@ export default function ProfilePage() {
   const [toast,             setToast]             = useState(null);
   const postParam = searchParams.get('post');
   const tabParam = searchParams.get('tab');
-  const noteParam = searchParams.get('note');
   const [activeTab,         setActiveTab]         = useState(() => {
     if (postParam) return 'posts';
     return PROFILE_TABS.has(tabParam) ? tabParam : 'posts';
@@ -247,8 +246,6 @@ export default function ProfilePage() {
   const [postsLoading,      setPostsLoading]      = useState(false);
   const [contextMenu,       setContextMenu]       = useState(null);
   const [lightbox,          setLightbox]          = useState(null);
-  const [voiceNotes,        setVoiceNotes]        = useState([]);
-  const [voiceNotesLoading, setVoiceNotesLoading] = useState(false);
   const [photoDraft,        setPhotoDraft]        = useState(null);
   const [photoSaving,       setPhotoSaving]       = useState(false);
 
@@ -261,7 +258,6 @@ export default function ProfilePage() {
   const profileId = id ?? authUser?.id;
   const isOwn   = Boolean(authUser?.id && String(authUser.id) === String(profileId));
   const openedPostRef = useRef(null);
-  const openedVoiceNoteRef = useRef(null);
   const userTier   = getTier(authUser);
   const isPremium  = userTier === 'premium' || userTier === 'standard';
   const isFree     = isOwn && premiumBilling && !isPremium;
@@ -276,7 +272,6 @@ export default function ProfilePage() {
       : []),
     { key: 'academic',     icon: 'fas fa-graduation-cap', label: 'Academic'     },
     { key: 'achievements', icon: 'fas fa-award',          label: 'Achievements' },
-    { key: 'voicenotes',   icon: 'fas fa-microphone',     label: 'Voice Notes'  },
   ];
 
   // Load student profile
@@ -289,7 +284,6 @@ export default function ProfilePage() {
   }, [profileId]);
 
   useEffect(() => { if (activeTab === 'posts')        loadPosts();        }, [activeTab, profileId]);
-  useEffect(() => { if (activeTab === 'voicenotes')   loadVoiceNotes();   }, [activeTab, profileId]);
   useEffect(() => { if (activeTab === 'achievements') loadAchievements(); }, [activeTab, profileId]);
   useEffect(() => { if (activeTab === 'academic')     loadAcademic();     }, [activeTab, profileId]);
 
@@ -311,16 +305,6 @@ export default function ProfilePage() {
     setLightbox({ post, idx: 0 });
   }, [postParam, posts, postsLoading]);
 
-  useEffect(() => {
-    if (!noteParam || voiceNotesLoading || !voiceNotes.length || openedVoiceNoteRef.current === noteParam) return;
-
-    const note = voiceNotes.find((item) => String(item.id) === String(noteParam));
-    if (!note) return;
-
-    openedVoiceNoteRef.current = noteParam;
-    document.getElementById(`voice-note-${noteParam}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [noteParam, voiceNotes, voiceNotesLoading]);
-
   useEffect(() => () => {
     if (photoDraft?.isObjectUrl && photoDraft?.previewUrl) URL.revokeObjectURL(photoDraft.previewUrl);
   }, [photoDraft?.isObjectUrl, photoDraft?.previewUrl]);
@@ -332,15 +316,6 @@ export default function ProfilePage() {
       .then(({ data }) => setPosts((data.data?.data ?? data.data ?? []).filter(shouldShowProfilePost)))
       .catch(() => {})
       .finally(() => setPostsLoading(false));
-  };
-
-  const loadVoiceNotes = () => {
-    if (!profileId) return;
-    setVoiceNotesLoading(true);
-    const req = isOwn ? voiceNotesApi.inbox() : voiceNotesApi.forProfile(profileId);
-    req.then(({ data }) => setVoiceNotes(Array.isArray(data) ? data : []))
-       .catch(() => setVoiceNotes([]))
-       .finally(() => setVoiceNotesLoading(false));
   };
 
   const loadAchievements = () => {
@@ -376,19 +351,13 @@ export default function ProfilePage() {
           graduation_year: data.graduation_year ?? null,
           batch:           data.batch           ?? null,
           year_level:      data.year_level      ?? null,
-          status:          data.status          ?? data.academic_status
-            ?? (data.graduation_year || data.role === 'alumni' ? 'Alumni' : null),
+          status:          academicStatusLabel(data),
           is_premium:      Boolean(tierSource.is_premium),
           tier:            getTier(tierSource),
         });
       })
       .catch(() => setAcademicData(null))
       .finally(() => setAcademicLoading(false));
-  };
-
-  const formatDuration = (s) => {
-    if (!s) return null;
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   };
 
   const showToast = (msg, type = 'success') => {
@@ -453,7 +422,7 @@ export default function ProfilePage() {
   };
 
   const handlePostDeleted = (pid) => {
-    setPosts(prev => prev.filter(p => p.id !== pid));
+    setPosts(prev => prev.filter(p => String(p.id) !== String(pid)));
     showToast('Post deleted.', 'error');
     setContextMenu(null);
   };
@@ -580,7 +549,16 @@ export default function ProfilePage() {
           onUpdated={handlePostUpdated}
         />
       )}
-      {lightbox && <PostLightbox post={lightbox.post} initialIdx={lightbox.idx} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <PostLightbox
+          post={lightbox.post}
+          initialIdx={lightbox.idx}
+          onClose={() => setLightbox(null)}
+          onViewCount={(postId, viewsCount) => {
+            setPosts(prev => prev.map(item => item.id === postId ? { ...item, views_count: viewsCount } : item));
+          }}
+        />
+      )}
 
       {toast && (
         <div className={`fixed top-20 left-1/2 z-[9000] px-5 py-2.5 rounded-xl text-sm font-semibold
@@ -683,16 +661,14 @@ export default function ProfilePage() {
             {/* Name + badges */}
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <h1 className="text-xl font-black text-[#1d2b4b] m-0 leading-none">{student.name}</h1>
-              {graduate && (
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full tracking-wide flex items-center gap-1">
-                  <i className="fas fa-graduation-cap text-[8px]" /> GRADUATE {student.graduation_year}
-                </span>
-              )}
-              {!graduate && (student.graduation_year || student.batch) && (
-                <span className="text-[10px] font-bold text-[#3f51b5] bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full tracking-wide">
-                  PIONEER {student.graduation_year ?? student.batch}
-                </span>
-              )}
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full tracking-wide flex items-center gap-1 ${
+                graduate
+                  ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                  : 'text-[#3f51b5] bg-indigo-50 border border-indigo-100'
+              }`}>
+                <i className={`fas ${graduate ? 'fa-user-graduate' : 'fa-user'} text-[8px]`} />
+                {graduate ? 'Alumni' : 'Current Student'}
+              </span>
               {isOwn && (
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${tierConfig.cls}`}>
                   <i className={`fas ${tierConfig.icon} text-[8px]`} />
@@ -1029,9 +1005,9 @@ export default function ProfilePage() {
                     { label: 'Year Level', value: academicData.year_level ?? 'N/A', icon: 'fa-layer-group' },
                     {
                       label: 'Status',
-                      value: academicData.status ?? (academicData.graduation_year ? 'Graduated' : 'N/A'),
-                      icon: academicData.graduation_year ? 'fa-graduation-cap' : 'fa-circle-check',
-                      green: academicData.status || academicData.graduation_year,
+                      value: academicData.status ?? 'Current Student',
+                      icon: academicData.status === 'Alumni' ? 'fa-user-graduate' : 'fa-user',
+                      green: academicData.status === 'Alumni',
                     },
                     { label: 'Batch', value: academicData.batch ?? academicData.graduation_year ?? 'N/A', icon: 'fa-users' },
                   ].map(row => (
@@ -1091,76 +1067,6 @@ export default function ProfilePage() {
                   className="inline-flex items-center gap-1.5 text-xs text-[#3f51b5] font-semibold no-underline hover:underline">
                   <i className="fas fa-pen-to-square text-[10px]" /> Edit Achievements in Settings
                 </Link>
-              </div>
-            )}
-          </TabCard>
-        )}
-
-        {/* VOICE NOTES TAB */}
-        {activeTab === 'voicenotes' && (
-          <TabCard
-            icon="fas fa-microphone"
-            label={isOwn ? `Voice Notes Received (${voiceNotes.length})` : `Voice Notes for ${student.name?.split(' ')[0]}`}
-            action={
-              <button onClick={loadVoiceNotes} disabled={voiceNotesLoading}
-                className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg px-3 py-1.5 bg-transparent cursor-pointer transition">
-                <i className={`fas fa-rotate-right text-[10px] ${voiceNotesLoading ? 'animate-spin' : ''}`} /> Refresh
-              </button>
-            }
-          >
-            {voiceNotesLoading ? (
-              <LoadingSkeleton variant="row" count={3} gridClassName="space-y-3" />
-            ) : voiceNotes.length === 0 ? (
-              <div className="flex flex-col items-center text-center py-14">
-                <div className="w-14 h-14 rounded-full bg-slate-100 border-2 border-slate-200 flex items-center justify-center mb-4">
-                  <i className="fas fa-microphone-slash text-slate-300 text-xl" />
-                </div>
-                <p className="text-sm font-bold text-[#1d2b4b] mb-1">No Voice Notes Yet</p>
-                <p className="text-xs text-slate-400">
-                  {isOwn ? 'Ask your batchmates to send you a voice memory!' : 'No approved voice notes yet.'}
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {voiceNotes.map(note => {
-                  const isTargetNote = noteParam && String(note.id) === String(noteParam);
-                  return (
-                  <div key={note.id}
-                    id={`voice-note-${note.id}`}
-                    className={`flex items-center gap-3 p-4 rounded-xl transition-shadow ${isTargetNote ? 'bg-amber-50 border border-amber-300 shadow-md shadow-amber-100' : 'bg-slate-50 border border-slate-100 hover:shadow-sm'}`}>
-                    <img
-                      src={note.sender?.profile_picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(note.sender?.name ?? 'S')}&background=1d2b4b&color=fdb813&bold=true&size=80`}
-                      alt={note.sender?.name}
-                      className="w-11 h-11 rounded-full object-cover shrink-0 border-2 border-slate-200"
-                      onError={e => { e.currentTarget.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(note.sender?.name ?? 'S')}&background=1d2b4b&color=fdb813&bold=true`; }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-sm font-bold text-[#1d2b4b]">{note.title ?? 'Voice Memory'}</span>
-                        {note.duration_seconds && (
-                          <span className="text-[10px] text-slate-400 bg-slate-200 rounded-full px-2 py-0.5 font-semibold">
-                            {formatDuration(note.duration_seconds)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 mb-2">
-                        From <strong className="text-[#1d2b4b]">{note.sender?.name ?? 'Anonymous'}</strong>
-                        {' · '}
-                        {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </p>
-                      <audio controls src={note.audio_url} className="w-full h-8" />
-                    </div>
-                    {isOwn && (
-                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full shrink-0 tracking-wide
-                        ${note.status === 'approved' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                          : note.status === 'rejected' ? 'bg-red-50 text-red-500 border border-red-100'
-                          : 'bg-amber-50 text-amber-600 border border-amber-100'}`}>
-                        {note.status?.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                );
-                })}
               </div>
             )}
           </TabCard>

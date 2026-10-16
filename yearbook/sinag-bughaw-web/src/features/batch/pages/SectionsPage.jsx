@@ -7,6 +7,8 @@ import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 import { storageUrl } from '@/api/client';
+import { directoryProfilePath } from '@/utils/studentProfilePath';
+import { readPageCache, writePageCache } from '@/utils/pageCache';
 
 function usableFaceMatches(matches = []) {
   const normalized = matches
@@ -68,8 +70,9 @@ function uniqueDepartmentsFromBatches(groupedBatches) {
 
 function computeStats(batches) {
   const all = Object.values(batches ?? {}).flat();
+  const uniqueBatches = new Map(all.map(batch => [batch.id, batch]));
   return {
-    totalBatches:  all.length,
+    totalBatches:  all.length || uniqueBatches.size,
     totalStudents: all.reduce((s, b) => s + Number(b.students_count ?? 0), 0),
     totalSections: all.reduce((s, b) => s + (b.sections?.length ?? 0), 0),
     totalDepts:    Object.keys(batches ?? {}).length,
@@ -79,25 +82,58 @@ function computeStats(batches) {
 export default function SectionsPage() {
   const [courseFilter,     setCourseFilter]     = useState(null);   // eslint-disable-line no-unused-vars
   const [departmentFilter, setDepartmentFilter] = useState(null);   // eslint-disable-line no-unused-vars
-  const [batches,          setBatches]          = useState({});
-  const [departments,      setDepartments]      = useState([]);
-  const [batchLoading,     setBatchLoading]     = useState(false);
+  const cachedSections = readPageCache('sections-directory');
+  const [batches,          setBatches]          = useState(cachedSections?.batches ?? {});
+  const [departments,      setDepartments]      = useState(cachedSections?.departments ?? []);
+  const [directoryStats,   setDirectoryStats]   = useState(cachedSections?.stats ?? null);
+  const [registered,       setRegistered]       = useState(cachedSections?.registered ?? []);
+  const [batchLoading,     setBatchLoading]     = useState(!cachedSections);
   const [query,            setQuery]            = useState('');
   const [faceSearching,    setFaceSearching]    = useState(false);
   const [matchedIds,       setMatchedIds]       = useState(new Set());
   const [isFaceMode,       setIsFaceMode]       = useState(false);
 
   useEffect(() => {
-    if (departments.length > 0) return;
-    setBatchLoading(true);
-    batchApi.all()
-      .then(({ data }) => {
-        const next = data.data ?? {};
-        setBatches(next);
-        setDepartments(data.departments?.length ? data.departments : uniqueDepartmentsFromBatches(next));
-      })
-      .finally(() => setBatchLoading(false));
-  }, [departments.length]);
+    let cancelled = false;
+
+    const load = (silent = false) => {
+      const cached = readPageCache('sections-directory');
+      if (cached) {
+        setBatches(cached.batches);
+        setDirectoryStats(cached.stats);
+        setRegistered(cached.registered);
+        setDepartments(cached.departments);
+      } else if (!silent) {
+        setBatchLoading(true);
+      }
+      batchApi.all()
+        .then(({ data }) => {
+          if (cancelled) return;
+          const next = data.data ?? {};
+          const snapshot = {
+            batches: next,
+            stats: data.stats ?? null,
+            registered: Array.isArray(data.registered) ? data.registered : [],
+            departments: data.departments?.length ? data.departments : uniqueDepartmentsFromBatches(next),
+          };
+          writePageCache('sections-directory', snapshot);
+          setBatches(snapshot.batches);
+          setDirectoryStats(snapshot.stats);
+          setRegistered(snapshot.registered);
+          setDepartments(snapshot.departments);
+        })
+        .finally(() => {
+          if (!silent && !cancelled) setBatchLoading(false);
+        });
+    };
+
+    load(false);
+    const timer = window.setInterval(() => load(true), 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const onSearch = val => {
     setQuery(val);
@@ -131,7 +167,7 @@ export default function SectionsPage() {
   const activeDepartments = departments.length ? departments : Object.keys(batches ?? {});
 
   const studentResults = (() => {
-    let r = allBatchStudents(batches);
+    let r = registered.length ? registered : allBatchStudents(batches);
     if (courseFilter)                  r = r.filter(s => looseCourseMatches(s.course, courseFilter));
     if (isFaceMode && matchedIds.size) r = r.filter(s => matchedIds.has(studentUserId(s)));
     if (query.trim()) {
@@ -170,7 +206,11 @@ export default function SectionsPage() {
     ].some(v => String(v ?? '').toLowerCase().includes(q));
   };
 
-  const { totalBatches, totalStudents, totalSections, totalDepts } = computeStats(batches);
+  const computed = computeStats(batches);
+  const totalBatches = Number(directoryStats?.batches ?? computed.totalBatches);
+  const totalStudents = Number(directoryStats?.total_students ?? computed.totalStudents);
+  const totalSections = Number(directoryStats?.sections ?? computed.totalSections);
+  const totalDepts = directoryStats?.departments?.length || computed.totalDepts;
   const isSearchActive = query.trim() || isFaceMode;
 
   return (
@@ -254,11 +294,10 @@ export default function SectionsPage() {
                   const avatar =
                     storageUrl(student.profile_picture ?? student.photo ?? student.photo_url) ||
                     `https://ui-avatars.com/api/?name=${encodeURIComponent(student.name || 'Student')}&background=1B2A4A&color=F5A623&bold=true`;
-                  const profileId = student.account_user_id ?? student.user_id ?? student.id;
                   return (
                     <Link
-                      key={`${student.batch_id}-${student.section_id}-${student.id}`}
-                      to={`/profile/${profileId}`}
+                      key={`${student.batch_id}-${student.section_id}-${student.account_user_id ?? student.user_id ?? student.id}`}
+                      to={directoryProfilePath(student)}
                       className="no-underline flex items-center gap-3.5 rounded-[14px] border border-[#e8eaf0] bg-white p-4 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(27,42,74,0.1)]"
                     >
                       <img
@@ -285,20 +324,34 @@ export default function SectionsPage() {
         )}
 
         {/* Batch Cards */}
-        {batchLoading ? (
+        {batchLoading && departments.length === 0 ? (
           <LoadingSkeleton variant="card" count={6} />
 
         ) : departments.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
             <i className="fas fa-graduation-cap text-[48px] text-slate-200" />
-            <p className="font-semibold m-0">No batches generated yet.</p>
-            <code className="text-xs bg-white border border-[#e8eaf0] px-3.5 py-1.5 rounded-lg text-slate-500">
-              php artisan batches:generate --sections
-            </code>
+            <p className="font-semibold m-0">No batches are available yet.</p>
+            <p className="text-sm m-0">Sections will appear here once the yearbook batches are ready.</p>
           </div>
 
         ) : (
           <div className="flex flex-col gap-10">
+            {(directoryStats?.departments ?? []).length > 0 && (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 mb-8">
+                {(directoryStats.departments ?? []).map(dept => (
+                  <div key={dept.department} className="bg-white rounded-2xl border border-[#e8eaf0] px-4 py-4">
+                    <p className="m-0 text-[11px] font-bold tracking-[0.12em] uppercase text-slate-400">{dept.department}</p>
+                    <p className="m-0 mt-1 text-[28px] font-extrabold text-[#1B2A4A] leading-none">
+                      {Number(dept.students_count ?? 0).toLocaleString()}
+                    </p>
+                    <p className="m-0 mt-1 text-xs font-semibold text-slate-400">
+                      registered student{Number(dept.students_count) === 1 ? '' : 's'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {activeDepartments.map(dept => {
               const deptBatches = (batches[dept] ?? [])
                 .filter(b => !courseFilter || (b.sections ?? []).some(s => looseCourseMatches(s.course, courseFilter)))
@@ -312,6 +365,9 @@ export default function SectionsPage() {
                     <div className="flex-1 h-px bg-slate-200" />
                     <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-slate-400 whitespace-nowrap">
                       {dept}
+                      {directoryStats?.departments?.some(item => item.department === dept) && (
+                        <> · {Number(directoryStats.departments.find(item => item.department === dept)?.students_count ?? 0).toLocaleString()} registered</>
+                      )}
                     </span>
                     <div className="flex-1 h-px bg-slate-200" />
                   </div>
@@ -324,7 +380,7 @@ export default function SectionsPage() {
 
                       return (
                         <div
-                          key={batch.id}
+                          key={`${dept}-${batch.id}`}
                           className="bg-white rounded-[18px] border border-[#e8eaf0] overflow-hidden flex flex-col transition-all duration-150 cursor-default hover:-translate-y-[3px] hover:shadow-[0_12px_32px_rgba(27,42,74,0.12)]"
                         >
                           {/* Accent stripe */}
@@ -357,6 +413,24 @@ export default function SectionsPage() {
                               <p className="text-xs font-semibold text-[#3730a3] m-0">
                                 {batch.course_code}
                               </p>
+                            )}
+
+                            {(batch.sections ?? []).length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                {(batch.sections ?? []).slice(0, 8).map(section => (
+                                  <span
+                                    key={section.id}
+                                    className="rounded-lg border border-[#e8eaf0] bg-[#f8fafc] px-2 py-1 text-[11px] font-bold text-[#1B2A4A]"
+                                  >
+                                    {section.name}
+                                  </span>
+                                ))}
+                                {(batch.sections ?? []).length > 8 && (
+                                  <span className="rounded-lg bg-[#EEF2FF] px-2 py-1 text-[11px] font-bold text-[#3730a3]">
+                                    +{(batch.sections ?? []).length - 8} more
+                                  </span>
+                                )}
+                              </div>
                             )}
 
                             {/* Spacer */}

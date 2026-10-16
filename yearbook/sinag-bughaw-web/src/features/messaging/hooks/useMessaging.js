@@ -17,15 +17,26 @@ export function useMessaging(recipientId = null) {
 
   const typingTimerRef  = useRef(null);
   const iAmTypingRef    = useRef(false);
-  // Track real message IDs we've already added (prevents WS duplicate)
   const seenIdsRef      = useRef(new Set());
+  const recipientRef    = useRef(recipientId);
+  const loadedRecipientRef = useRef(null);
+  const didInitialLoadRef = useRef(false);
+  recipientRef.current = recipientId;
+  const threadRef       = useRef([]);
+  const loadedRecipientRef = useRef(null);
+  const skeletonUsedRef = useRef(false);
+  threadRef.current = thread;
 
   // Conversations
 
   const fetchConversations = useCallback(async () => {
     try {
       const { data } = await messagesApi.conversations();
-      setConversations(Array.isArray(data) ? data : []);
+      const next = Array.isArray(data) ? data : [];
+      setConversations((prev) => {
+        const signature = (list) => list.map((item) => `${item.id}:${item.unread_count ?? item.unread ?? 0}:${item.body ?? item.last_message ?? ''}:${item.updated_at ?? item.created_at ?? ''}`).join('|');
+        return signature(prev) === signature(next) ? prev : next;
+      });
     } catch (err) {
       setError(err);
     }
@@ -33,19 +44,27 @@ export function useMessaging(recipientId = null) {
 
   // Thread
 
-  const fetchThread = useCallback(async (id) => {
+  const fetchThread = useCallback(async (id, { replace = false } = {}) => {
     if (!id) return;
     try {
-      setLoading(true);
       const { data } = await messagesApi.thread(id);
+      if (String(recipientRef.current) !== String(id)) return;
       const msgs = Array.isArray(data) ? data : (data.data ?? []);
-      // Populate seenIds so WS events don't duplicate
-      seenIdsRef.current = new Set(msgs.map(m => m.id));
-      setThread(msgs);
+      setThread((prev) => {
+        if (!replace) {
+          const known = new Set(prev.map((message) => String(message.id)));
+          const fresh = msgs.filter((message) => !known.has(String(message.id)));
+          if (!fresh.length) return prev;
+          fresh.forEach((message) => seenIdsRef.current.add(message.id));
+          return [...prev, ...fresh];
+        }
+        const pending = prev.filter((message) => message._optimistic && !msgs.some((item) => String(item.id) === String(message.id)));
+        const next = pending.length ? [...msgs, ...pending] : msgs;
+        seenIdsRef.current = new Set(next.map((message) => message.id));
+        return next;
+      });
     } catch (err) {
       setError(err);
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -199,42 +218,45 @@ export function useMessaging(recipientId = null) {
     });
   }, [fetchConversations, fetchUnreadCount]);
 
-  // Load thread when recipient changes
+  // First load, and a one-time fetch when the open conversation changes.
+  // This is the only path allowed to show a skeleton, and only while the thread is empty.
   useEffect(() => {
-    queueMicrotask(() => {
-      if (recipientId) {
-        seenIdsRef.current = new Set(); // reset seen IDs for new thread
-        fetchThread(recipientId);
-      } else {
-        setThread([]);
-      }
+    let cancelled = false;
+    const id = recipientId;
+
+    if (!id) {
+      loadedRecipientRef.current = null;
+      return undefined;
+    }
+
+    if (loadedRecipientRef.current === String(id)) return undefined;
+
+    const showSkeleton = !didInitialLoadRef.current;
+    if (showSkeleton) setLoading(true);
+
+    fetchThread(id, { replace: true }).finally(() => {
+      if (cancelled) return;
+      loadedRecipientRef.current = String(id);
+      didInitialLoadRef.current = true;
+      setLoading(false);
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [recipientId, fetchThread]);
 
-  // HTTP polling fallback (keeps UI live when Echo/Pusher is unavailable)
+  // Background refresh. Never toggles loading and never replaces or clears the thread.
   useEffect(() => {
-    const pollMs = recipientId ? 4000 : 8000;
     const timer = setInterval(() => {
       fetchConversations();
       fetchUnreadCount();
-      if (recipientId) {
-        messagesApi.thread(recipientId)
-          .then(({ data }) => {
-            const msgs = Array.isArray(data) ? data : (data?.data ?? []);
-            setThread((prev) => {
-              const prevIds = prev.map((m) => String(m.id)).join(',');
-              const nextIds = msgs.map((m) => String(m.id)).join(',');
-              if (prevIds === nextIds) return prev;
-              seenIdsRef.current = new Set(msgs.map((m) => m.id));
-              return msgs;
-            });
-          })
-          .catch(() => {});
-      }
-    }, pollMs);
+      const id = recipientRef.current;
+      if (id) fetchThread(id, { replace: false });
+    }, 8000);
 
     return () => clearInterval(timer);
-  }, [recipientId, fetchConversations, fetchUnreadCount]);
+  }, [fetchConversations, fetchUnreadCount, fetchThread]);
 
   return {
     conversations,

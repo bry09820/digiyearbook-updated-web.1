@@ -7,13 +7,14 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use App\Models\Setting;
+use App\Models\User;
+use App\Services\Student\BatchService;
 use Carbon\Carbon;
 
 class AdminController extends Controller
 {
     private const ROLE_STUDENT = 'student';
     private const ROLE_FACULTY = 'faculty';
-    private const SUBSCRIPTION_STATUS_ACTIVE = 'active';
     private const AUDIT_STATUS_FAILED = 'Failed';
     private const UPLOAD_TYPE_IMAGE = 'image';
     private const LIMIT_RECENT_ACTIVITY  = 10;
@@ -21,10 +22,12 @@ class AdminController extends Controller
     private const LIMIT_TRENDING_ALUMNI  = 5;
     private const ENGAGEMENT_WINDOW_DAYS = 7;
 
-    public function dashboard(Request $request): JsonResponse
+    public function dashboard(Request $request, BatchService $batches): JsonResponse
     {
-        $totalStudents  = DB::table('users')->where('role', self::ROLE_STUDENT)->count();
-        $facultyMembers = DB::table('users')->where('role', self::ROLE_FACULTY)->count();
+        $directory = $batches->directoryTotals();
+        $registered = $batches->registeredAccounts();
+        $accounts = User::accountCensus();
+        $tiers = User::subscriptionTierCensus();
         $galleryPhotos  = DB::table('photos')->count();
 
         $alertCount = DB::table('audit_logs')
@@ -32,34 +35,32 @@ class AdminController extends Controller
             ->whereDate('created_at', today())
             ->count();
 
-        $activeSubscriptions = DB::table('subscriptions')
-            ->where('status', self::SUBSCRIPTION_STATUS_ACTIVE)
-            ->where(fn($q) =>
-                $q->whereNull('expires_at')
-                  ->orWhere('expires_at', '>', now())
-            )
-            ->count();
+        $activeSubscriptions = $tiers['premium_standard'] + $tiers['premium'];
 
         $metrics = [
-            'total_students'       => $totalStudents,
-            'faculty_members'      => $facultyMembers,
+            'total_users'          => $accounts['total_users'],
+            'total_students'       => $accounts['total_students'],
+            'total_batches'        => $directory['batches'],
+            'total_sections'       => $directory['sections'],
+            'total_alumni'         => $accounts['total_alumni'],
+            'verified_users'       => $accounts['verified_users'],
+            'unverified_users'     => $accounts['unverified_users'],
+            'suspended_users'      => $accounts['suspended_users'],
+            'admin_accounts'       => $accounts['admin_accounts'],
+            'enrolled_students'    => $registered->filter(fn (array $person) => ! empty($person['section_id']))->count(),
+            'active_users'         => DB::table('user_presence')->where('last_seen_at', '>=', now()->subDay())->count(),
+            'faculty_members'      => $accounts['faculty_members'],
             'gallery_photos'       => $galleryPhotos,
             'system_alerts'        => $alertCount,
             'active_subscriptions' => $activeSubscriptions,
-            'storage_used_gb'      => 0,
-            'storage_total_gb'     => config('storage.limit_gb'),
-            'ai_processed_today'   => 0,
         ];
 
-        // Enrollment by Year
-        $enrollmentByYear = DB::table('users')
-            ->join('students', 'users.student_record_id', '=', 'students.id')
-            ->where('users.role', self::ROLE_STUDENT)
-            ->whereNotNull('students.graduation_year')
-            ->selectRaw('students.graduation_year as year, COUNT(*) as total')
-            ->groupBy('students.graduation_year')
-            ->orderBy('students.graduation_year')
-            ->get();
+        $enrollmentByYear = $registered
+            ->filter(fn (array $person) => ! empty($person['graduation_year']))
+            ->countBy(fn (array $person) => (int) $person['graduation_year'])
+            ->map(fn ($total, $year) => ['year' => (int) $year, 'total' => (int) $total])
+            ->sortBy('year')
+            ->values();
 
         // Recent Activity 
         $recentActivity = DB::table('audit_logs')
@@ -100,6 +101,7 @@ class AdminController extends Controller
         ->join('users', 'profile_views.viewed_user_id', '=', 'users.id')
         ->leftJoin('students', 'users.student_record_id', '=', 'students.id')
         ->where('users.role', self::ROLE_STUDENT)
+        ->whereNull('users.deleted_at')
         ->selectRaw("
             users.id,
             CONCAT(users.first_name, ' ', users.last_name) AS name,
@@ -123,12 +125,14 @@ class AdminController extends Controller
             'returning_alumni' => DB::table('personal_access_tokens')
                 ->join('users', 'personal_access_tokens.tokenable_id', '=', 'users.id')
                 ->where('users.role', self::ROLE_STUDENT)
+                ->whereNull('users.deleted_at')
                 ->where('personal_access_tokens.last_used_at', '>=', $engagementWindowStart)
                 ->distinct('users.id')
                 ->count('users.id'),
 
             'new_registrations' => DB::table('users')
                 ->where('role', self::ROLE_STUDENT)
+                ->whereNull('deleted_at')
                 ->where('created_at', '>=', $engagementWindowStart)
                 ->count(),
         ];
@@ -140,7 +144,8 @@ class AdminController extends Controller
             'recent_uploads'     => $recentUploads,
             'trending_alumni'    => $trendingAlumni,
             'engagement'         => $engagement,
-        ]);
+        ])->header('Cache-Control', 'no-store, private, max-age=0')
+          ->header('Pragma', 'no-cache');
     }
 
     public function getSettings(): JsonResponse

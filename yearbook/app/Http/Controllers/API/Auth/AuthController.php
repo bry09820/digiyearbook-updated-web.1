@@ -16,6 +16,7 @@ use App\Models\Student;
 use App\Models\User;
 use App\Models\UserPresence;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Laravel\Socialite\Facades\Socialite;
@@ -29,6 +30,7 @@ use App\Support\SubscriptionAccess;
 
 class AuthController extends Controller
 {
+    private const OTP_TTL_MINUTES = 15;
     public function __construct(
         private readonly FaceRecognition $faceRecognition,
     ) {}
@@ -48,9 +50,14 @@ class AuthController extends Controller
             'password'         => 'required|min:8|confirmed',
             'student_id'       => 'required|string|max:255|unique:users,student_id',
             'course'           => 'required|string|max:255',
-            'graduation_year'  => 'required|integer|min:1990|max:2100',
+            'graduation_year'  => Batch::yearRules(),
             'batch'            => 'nullable|string|max:255',
+            'account_status'   => 'required|in:student,alumni',
             'consent_accepted' => 'required|accepted',
+            'terms_accepted'   => 'required|accepted',
+        ], [
+            'account_status.required' => 'Select whether you are a current student or an alumni.',
+            'account_status.in'       => 'Select either Current Student or Alumni.',
         ]);
 
         $studentRecord = $this->findMatchingStudentRecord($request);
@@ -62,10 +69,21 @@ class AuthController extends Controller
         }
 
         $course         = $studentRecord?->course ?: $request->course;
-        $graduationYear = $studentRecord?->graduation_year ?: (int) $request->graduation_year;
-        $batch          = (string) ($studentRecord?->graduation_year ?: ($request->batch ?: $request->graduation_year));
-        $batchId        = $studentRecord?->batch_id
-            ?: Batch::where('graduation_year', $graduationYear)
+        $recordYear     = (int) ($studentRecord?->graduation_year ?? 0);
+        $graduationYear = Batch::yearAllowed($recordYear) ? $recordYear : (int) $request->graduation_year;
+
+        if (! Batch::yearAllowed($graduationYear)) {
+            throw ValidationException::withMessages([
+                'graduation_year' => ['Select a batch from '.Batch::MIN_YEAR.' through '.Batch::maxYear().'.'],
+            ]);
+        }
+        $isAlumni       = $request->input('account_status') === 'alumni';
+        $batch          = (string) $graduationYear;
+        $linkedBatchId  = $studentRecord?->batch_id
+            ? Batch::campusYears()->whereKey($studentRecord->batch_id)->value('id')
+            : null;
+        $batchId        = $linkedBatchId
+            ?: Batch::campusYears()->where('graduation_year', $graduationYear)
                 ->where(function ($query) use ($course) {
                     $query->where('course', $course)->orWhereNull('course');
                 })
@@ -82,7 +100,9 @@ class AuthController extends Controller
                     : trim($request->first_name . ' ' . $request->last_name),
                 'email'             => $request->email,
                 'password'          => $request->password,
-                'role'              => User::ROLE_STUDENT,
+                'role'              => $isAlumni ? User::ROLE_ALUMNI : User::ROLE_STUDENT,
+                'is_alumni'         => $isAlumni,
+                'terms_accepted_at' => now(),
                 'student_record_id' => $studentRecord?->id,
                 'student_id'        => $studentRecord?->student_no ?? $request->student_id,
                 'course'            => $course,
@@ -396,7 +416,14 @@ class AuthController extends Controller
 
         RateLimiter::clear($rateKey);
 
-        $token = $user->createToken('app-token')->plainTextToken;
+        $issued = $this->issueAccessToken($user);
+        if (isset($issued['error'])) {
+            return response()->json([
+                'message' => $issued['message'],
+                'code'    => 'SESSION_LIMIT',
+            ], 409);
+        }
+        $token = $issued['token'];
         $this->markPresence($user->id, true);
 
         AuditLog::record(
@@ -408,7 +435,8 @@ class AuthController extends Controller
         $user->load('studentRecord', 'section');
 
         return response()->json([
-            'message'          => 'Face login successful.',
+            'message'          => $issued['notice'] ?? 'Face login successful.',
+            'session_notice'   => $issued['notice'] ?? null,
             'user'             => $this->authUserPayload($user),
             'token'            => $token,
             'access_token'     => $token,
@@ -501,17 +529,11 @@ class AuthController extends Controller
     {
         $request->validate([
             'email' => 'required|email',
-            'otp'   => 'required|string|size:6',
+            'otp'   => 'required',
         ]);
 
         $email = strtolower(trim((string) $request->email));
-
-        $record = OtpVerification::whereRaw('LOWER(TRIM(email)) = ?', [$email])
-            ->where('type', 'verification')
-            ->where('otp', $request->otp)
-            ->where('used', false)
-            ->where('expires_at', '>=', now())
-            ->first();
+        $record = $this->matchOtp($email, 'verification', $request->input('otp'));
 
         if (! $record) {
             return response()->json(['message' => 'Invalid or expired OTP.'], 422);
@@ -530,14 +552,21 @@ class AuthController extends Controller
             'email_verified_at' => $user->email_verified_at ?? now(),
         ]);
 
-        $user->tokens()->delete();
-        $token = $user->createToken('app-token')->plainTextToken;
+        $issued = $this->issueAccessToken($user);
+        if (isset($issued['error'])) {
+            return response()->json([
+                'message' => $issued['message'],
+                'code'    => 'SESSION_LIMIT',
+            ], 409);
+        }
+        $token = $issued['token'];
         $this->markPresence($user->id, true);
 
         return response()->json([
-            'message'      => 'Email verified successfully.',
-            'access_token' => $token,
-            'token'        => $token,
+            'message'        => 'Email verified successfully.',
+            'session_notice' => $issued['notice'] ?? null,
+            'access_token'   => $token,
+            'token'          => $token,
             'user'         => $this->authUserPayload($user->fresh()->load('studentRecord', 'section')),
         ]);
     }
@@ -553,17 +582,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'If that email is registered, a reset code has been sent.']);
         }
 
-        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-
-        OtpVerification::updateOrCreate(
-            ['email' => $request->email, 'type' => 'password_reset'],
-            [
-                'otp'         => $otp,
-                'expires_at'  => now()->addMinutes(10),
-                'used'        => false,
-                'reset_token' => null,
-            ]
-        );
+        $otp = $this->storeOtp(strtolower(trim((string) $request->email)), 'password_reset');
 
         try {
             app(BrevoMailService::class)->sendPasswordReset(
@@ -582,15 +601,14 @@ class AuthController extends Controller
     {
         $request->validate([
             'email' => 'required|email',
-            'otp'   => 'required|string|size:6',
+            'otp'   => 'required',
         ]);
 
-        $record = OtpVerification::where('email', $request->email)
-            ->where('type', 'password_reset')
-            ->where('otp', $request->otp)
-            ->where('used', false)
-            ->where('expires_at', '>=', now())
-            ->first();
+        $record = $this->matchOtp(
+            strtolower(trim((string) $request->email)),
+            'password_reset',
+            $request->input('otp')
+        );
 
         if (! $record) {
             return response()->json(['message' => 'Invalid or expired code.'], 422);
@@ -704,6 +722,7 @@ class AuthController extends Controller
     private function authUserPayload(User $user): array
     {
         $user->loadMissing('studentRecord', 'section');
+        $user->applyAlumniIdentity();
 
         return array_merge([
             'id'                  => $user->id,
@@ -727,6 +746,9 @@ class AuthController extends Controller
             'visibility'          => $user->profile_visibility ?: 'public',
             'email_verified'      => (bool) $user->email_verified,
             'consent_accepted'    => (bool) $user->consent_accepted,
+            'is_alumni'           => $user->isAlumni(),
+            'academic_status'     => $user->academicStatusLabel(),
+            'terms_accepted_at'   => $user->terms_accepted_at,
             'section'             => $user->section,
             'student_record'      => $user->studentRecord,
             'studentRecord'       => $user->studentRecord,
@@ -736,19 +758,125 @@ class AuthController extends Controller
     private function sendVerificationOtp(string $email): void
     {
         $email = strtolower(trim($email));
-        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-
-        OtpVerification::updateOrCreate(
-            ['email' => $email, 'type' => 'verification'],
-            [
-                'otp'        => $otp,
-                'expires_at' => now()->addMinutes(10),
-                'used'       => false,
-            ]
-        );
+        $otp = $this->storeOtp($email, 'verification');
 
         // Send immediately so OTP emails work without a running queue worker.
         SendOtpEmail::dispatchSync($email, $otp);
+    }
+
+    /**
+     * Replace every previous code of this type for the email with one new code.
+     */
+    private function storeOtp(string $email, string $type): string
+    {
+        $email = strtolower(trim($email));
+        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expiresAt = now()->addMinutes(self::OTP_TTL_MINUTES);
+
+        DB::transaction(function () use ($email, $type, $otp, $expiresAt) {
+            OtpVerification::query()
+                ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
+                ->where('type', $type)
+                ->delete();
+
+            OtpVerification::create([
+                'email'       => $email,
+                'type'        => $type,
+                'otp'         => $otp,
+                'expires_at'  => $expiresAt,
+                'used'        => false,
+                'reset_token' => null,
+            ]);
+        });
+
+        Log::info('OTP generated', [
+            'email'      => $email,
+            'type'       => $type,
+            'otp'        => $otp,
+            'expires_at' => $expiresAt->toDateTimeString(),
+        ]);
+
+        return $otp;
+    }
+
+    private function matchOtp(string $email, string $type, mixed $submitted): ?OtpVerification
+    {
+        $email = strtolower(trim($email));
+        $submittedCode = $this->normalizeOtp($submitted);
+
+        $record = OtpVerification::query()
+            ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
+            ->where('type', $type)
+            ->where('used', false)
+            ->orderByDesc('id')
+            ->first();
+
+        $expectedCode = $this->normalizeOtp($record?->otp);
+        $expired = $record?->expires_at ? $record->expires_at->lt(now()) : true;
+
+        Log::info('OTP verification attempt', [
+            'email'      => $email,
+            'type'       => $type,
+            'expected'   => $expectedCode,
+            'submitted'  => $submittedCode,
+            'expired'    => $record ? $expired : null,
+            'expires_at' => $record?->expires_at?->toDateTimeString(),
+            'record_id'  => $record?->id,
+        ]);
+
+        if (
+            ! $record
+            || $expired
+            || strlen($expectedCode) !== 6
+            || strlen($submittedCode) !== 6
+            || ! hash_equals($expectedCode, $submittedCode)
+        ) {
+            return null;
+        }
+
+        return $record;
+    }
+
+    private function normalizeOtp(mixed $value): string
+    {
+        $digits = preg_replace('/\D+/', '', (string) $value) ?? '';
+
+        if ($digits === '') {
+            return '';
+        }
+
+        if (strlen($digits) < 6) {
+            $digits = str_pad($digits, 6, '0', STR_PAD_LEFT);
+        }
+
+        return substr($digits, 0, 6);
+    }
+
+    private function issueAccessToken(User $user): array
+    {
+        $max  = max(1, (int) config('auth_limits.max_sessions', 1));
+        $mode = (string) config('auth_limits.on_exceeded', 'invalidate');
+        $existing = $user->tokens()->count();
+
+        if ($existing >= $max && $mode === 'reject') {
+            return [
+                'error'   => true,
+                'message' => "This account already has {$existing} active sign-in"
+                    . ($existing === 1 ? '' : 's')
+                    . ". The limit is {$max}. Sign out on the other device, or raise AUTH_MAX_SESSIONS.",
+            ];
+        }
+
+        $notice = null;
+        if ($existing > 0 && ($mode === 'invalidate' || $existing >= $max)) {
+            $user->tokens()->delete();
+            $notice = 'You were signed out of other devices. Only this session stays active.';
+        }
+
+        return [
+            'token'  => $user->createToken('app-token')->plainTextToken,
+            'notice' => $notice,
+        ];
     }
 
     private function markPresence(int $userId, bool $isOnline): void

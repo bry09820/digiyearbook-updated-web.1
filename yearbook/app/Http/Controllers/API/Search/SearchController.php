@@ -18,7 +18,19 @@ class SearchController extends Controller
 
     private function courseVariants(?string $course, ?string $courseShort = null): array
     {
-        $values = array_filter([$course, $courseShort], fn ($value) => trim((string) $value) !== '');
+        $values = array_filter([$course, $courseShort], function ($value) {
+            $text = strtolower(trim((string) $value));
+
+            return $text !== '' && ! in_array($text, [
+                'all',
+                'all programs',
+                'all courses',
+                'all schools',
+                'all departments',
+                'null',
+                'undefined',
+            ], true);
+        });
 
         return collect($values)
             ->flatMap(fn ($value) => BatchService::courseVariantsFor($value))
@@ -41,7 +53,8 @@ class SearchController extends Controller
         $results = [];
 
         if (in_array($type, ['students', 'all'])) {
-            $results['students'] = User::whereIn('role', PlatformSettings::directoryRoles())
+            $results['students'] = User::with(['studentRecord', 'section'])
+                ->whereIn('role', PlatformSettings::directoryRoles())
                 ->where(function ($q) use ($query) {
                     $q->where('name', 'like', "%{$query}%")
                       ->orWhere('email', 'like', "%{$query}%")
@@ -52,41 +65,7 @@ class SearchController extends Controller
                               ->orWhere('last_name', 'like', "%{$query}%");
                       });
                 })
-                ->when(!$viewer, fn($q) =>
-                    $q->where('profile_visibility', 'public')
-                )
-                ->when($viewer, fn($q) =>
-                    $q->where(function ($inner) use ($viewer) {
-                        $inner->where('profile_visibility', 'public')
-                              ->orWhere(function ($batchmates) use ($viewer) {
-                                  $batchmates->whereIn('profile_visibility', ['batchmates', 'alumni_only'])
-                                      ->where(function ($sameBatch) use ($viewer) {
-                                          $hasBatchScope = false;
-
-                                          if ($viewer->batch_id) {
-                                              $sameBatch->orWhere('batch_id', $viewer->batch_id);
-                                              $hasBatchScope = true;
-                                          }
-
-                                          $viewerYear = $viewer->graduation_year ?? $viewer->batch;
-                                          if ($viewerYear) {
-                                              $sameBatch
-                                                  ->orWhere('graduation_year', $viewerYear)
-                                                  ->orWhere('batch', (string) $viewerYear)
-                                                  ->orWhereHas('studentRecord', fn($student) =>
-                                                      $student->where('graduation_year', $viewerYear)
-                                                  );
-                                              $hasBatchScope = true;
-                                          }
-
-                                          if (! $hasBatchScope) {
-                                              $sameBatch->whereRaw('1 = 0');
-                                          }
-                                      });
-                              })
-                              ->orWhere('id', $viewer->id);
-                    })
-                )
+                ->visibleTo($viewer)
                 ->take(10)
                 ->get()
                 ->map(fn($u) => [
@@ -158,10 +137,13 @@ class SearchController extends Controller
             $builder->whereIn('role', PlatformSettings::directoryRoles());
 
             $paginator = $builder->paginate($perPage);
+            $viewer = request()->user();
 
             return response()->json([
                 'data' => collect($paginator->items())
-                            ->map(fn(User $u) => $this->formatStudent($u)),
+                            ->filter(fn (User $u) => $u->canBeViewedBy($viewer))
+                            ->map(fn(User $u) => $this->formatStudent($u))
+                            ->values(),
                 'meta' => [
                     'total'        => $paginator->total(),
                     'per_page'     => $paginator->perPage(),
@@ -191,6 +173,7 @@ class SearchController extends Controller
     ): JsonResponse {
         $builder = User::with(['section', 'studentRecord'])
             ->whereIn('role', PlatformSettings::directoryRoles())
+            ->visibleTo(request()->user())
             ->when($query !== '', function ($q) use ($query) {
                 $q->where(function ($sub) use ($query) {
                     $sub->where('name', 'like', "%{$query}%")
@@ -251,6 +234,7 @@ class SearchController extends Controller
         } catch (\Throwable) {
             $results = User::with('studentRecord')
                 ->whereIn('role', PlatformSettings::directoryRoles())
+                ->visibleTo($request->user())
                 ->where(function ($q) use ($query) {
                     $q->where('name', 'like', "%{$query}%")
                       ->orWhere('email', 'like', "%{$query}%")
@@ -262,9 +246,12 @@ class SearchController extends Controller
         }
 
         $results->loadMissing('studentRecord');
+        $viewer = $request->user();
 
         return response()->json([
-            'suggestions' => $results->map(fn(User $u) => [
+            'suggestions' => $results
+                ->filter(fn (User $u) => $u->canBeViewedBy($viewer))
+                ->map(fn(User $u) => [
                 'id'                => $u->id,
                 'user_id'           => $u->id,
                 'account_user_id'   => $u->id,

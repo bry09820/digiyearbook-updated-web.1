@@ -27,7 +27,10 @@ class AnalyticsController extends Controller
     public function trending(Request $request): JsonResponse
     {
         $limit = max(1, min((int) $request->query('limit', 10), 50));
-        return response()->json(['data' => $this->analytics->mixedTrending($limit)]);
+        return response()->json([
+            'data' => $this->analytics->mixedTrending($limit),
+            'views_this_week' => $this->analytics->viewsThisWeek(),
+        ]);
     }
 
     public function myStats(Request $request): JsonResponse
@@ -73,7 +76,7 @@ class AnalyticsController extends Controller
             'url'          => 'nullable|string|max:255',
         ]);
 
-        $this->analytics->recordContentView(
+        $viewsCount = $this->analytics->recordContentView(
             contentType:  $data['content_type'],
             contentId:    (int) $data['content_id'],
             viewerUserId: $request->user()?->id,
@@ -83,6 +86,9 @@ class AnalyticsController extends Controller
             url:          $data['url'] ?? null,
         );
 
-        return response()->json(['recorded' => true]);
+        return response()->json([
+            'recorded' => true,
+            'views_count' => $viewsCount,
+        ]);
     }
 }

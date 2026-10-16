@@ -168,13 +168,6 @@ export const profileSettingsApi = {
   topViewed:        ()           => api.get('/analytics/top-viewed'),
 };
 
-// Voice Notes
-export const voiceNotesApi = {
-  list:   ()   => api.get('/voice-notes'),
-  upload: (fd) => api.post('/voice-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } }),
-  delete: (id) => api.delete(`/voice-notes/${id}`),
-};
-
 // Graduation
 export const graduationApi = {
   list:          (category) => api.get('/graduation', { params: { category } }),

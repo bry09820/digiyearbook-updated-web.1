@@ -7,16 +7,107 @@ use App\Http\Controllers\Concerns\AuditsAdminActions;
 use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\Section;
+use App\Services\Student\BatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class BatchSectionController extends Controller
 {
     use AuditsAdminActions;
+
+    public function __construct(private readonly BatchService $batches) {}
+
+    // GET /api/admin/academics/directory
+    public function directory(): JsonResponse
+    {
+        $grouped = $this->batches->getBatchesByDepartment();
+        $stats = $this->batches->departmentStats();
+        $totals = $this->batches->directoryTotals();
+
+        return response()->json([
+            'data' => $grouped,
+            'departments' => collect($stats['departments'])->pluck('department')->values(),
+            'stats' => array_merge($stats, [
+                'batches' => $totals['batches'],
+                'sections' => $totals['sections'],
+            ]),
+            'totals' => $totals,
+            'registered' => $this->batches->registeredAccounts()->values(),
+        ]);
+    }
+
+    // GET /api/admin/academics/summary
+    public function summary(): JsonResponse
+    {
+        return response()->json(['data' => $this->batches->directoryTotals()]);
+    }
+
+    // GET /api/admin/academics/students
+    public function registeredStudents(Request $request): JsonResponse
+    {
+        $search = trim((string) $request->get('search', ''));
+        $year = $request->filled('graduation_year') ? (int) $request->get('graduation_year') : null;
+        if ($year !== null && ! Batch::yearAllowed($year)) {
+            $year = -1;
+        }
+        $sectionId = $request->filled('section_id') ? (int) $request->get('section_id') : null;
+        $department = trim((string) $request->get('department', ''));
+
+        $people = $this->batches->registeredAccounts()
+            ->when($year, fn (Collection $rows) => $rows->filter(
+                fn (array $person) => (int) ($person['graduation_year'] ?? 0) === $year
+            ))
+            ->when($sectionId, fn (Collection $rows) => $rows->filter(
+                fn (array $person) => (int) ($person['section_id'] ?? 0) === $sectionId
+            ))
+            ->when($department !== '', fn (Collection $rows) => $rows->filter(
+                fn (array $person) => strcasecmp((string) $person['department'], $department) === 0
+            ))
+            ->when($search !== '', function (Collection $rows) use ($search) {
+                $term = mb_strtolower($search);
+
+                return $rows->filter(function (array $person) use ($term) {
+                    $haystack = mb_strtolower(implode(' ', array_filter([
+                        $person['name'] ?? null,
+                        $person['first_name'] ?? null,
+                        $person['last_name'] ?? null,
+                        $person['course'] ?? null,
+                        $person['department'] ?? null,
+                        $person['section_name'] ?? null,
+                        $person['student_no'] ?? null,
+                    ])));
+
+                    return str_contains($haystack, $term);
+                });
+            })
+            ->values();
+
+        $emails = DB::table('users')
+            ->whereIn('id', $people->pluck('id'))
+            ->pluck('email', 'id');
+
+        $data = $people->map(function (array $person) use ($emails) {
+            return [
+                ...$person,
+                'email' => $emails[$person['id']] ?? null,
+                'photo_url' => $person['profile_picture'] ?? null,
+            ];
+        })->values();
+
+        return response()->json([
+            'data' => $data,
+            'total' => $data->count(),
+            'totals' => $this->batches->directoryTotals(),
+        ]);
+    }
+
     // GET /api/admin/batches
     public function batchIndex(Request $request): JsonResponse
     {
-        $query = Batch::query()->withCount(['sections', 'students']);
+        $people = $this->batches->registeredAccounts();
+        $query = Batch::query()->campusYears()->withCount('sections');
 
         if ($search = $request->get('search')) {
             $query->where(function ($q) use ($search) {
@@ -38,16 +129,28 @@ class BatchSectionController extends Controller
         $batches = $query
             ->orderByDesc('graduation_year')
             ->orderBy('name')
-            ->paginate($request->get('per_page', 20));
+            ->get()
+            ->each(function (Batch $batch) use ($people) {
+                $batch->students_count = $people->filter(
+                    fn (array $person) => (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
+                )->count();
+            });
 
-        return response()->json($batches);
+        return response()->json([
+            'data' => $batches,
+            'totals' => $this->batches->directoryTotals(),
+        ]);
     }
 
     // GET /api/admin/batches/{batch}
     public function batchShow(Batch $batch): JsonResponse
     {
-        $batch->load(['sections.students', 'students']);
-        $batch->loadCount(['sections', 'students']);
+        $people = $this->batches->registeredAccounts();
+        $batch->load('sections');
+        $batch->loadCount('sections');
+        $batch->students_count = $people->filter(
+            fn (array $person) => (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
+        )->count();
 
         return response()->json(['data' => $batch]);
     }
@@ -92,10 +195,34 @@ class BatchSectionController extends Controller
             'name'            => 'required|string|max:255',
             'course'          => 'nullable|string|max:255',
             'course_code'     => 'nullable|string|max:20',
-            'graduation_year' => 'required|integer|min:2000|max:2100',
+            'graduation_year' => Batch::yearRules(),
             'department'      => 'nullable|string|max:255',
             'description'     => 'nullable|string|max:500',
+        ], [
+            'graduation_year.min' => 'Graduation year must be from '.Batch::MIN_YEAR.' through '.Batch::maxYear().'.',
+            'graduation_year.max' => 'Graduation year must be from '.Batch::MIN_YEAR.' through '.Batch::maxYear().'.',
         ]);
+
+        $validated['graduation_year'] = (int) $validated['graduation_year'];
+        $validated['name'] = trim($validated['name']);
+
+        $duplicate = Batch::query()
+            ->where('graduation_year', $validated['graduation_year'])
+            ->when(
+                filled($validated['course'] ?? null),
+                fn ($query) => $query->where('course', $validated['course']),
+                fn ($query) => $query->whereNull('course')
+            )
+            ->exists();
+
+        if ($duplicate) {
+            return response()->json([
+                'message' => 'A batch for '.$validated['graduation_year'].' already exists.',
+                'errors' => [
+                    'graduation_year' => ['A batch for '.$validated['graduation_year'].' already exists.'],
+                ],
+            ], 422);
+        }
 
         $batch = Batch::create($validated);
 
@@ -121,7 +248,7 @@ class BatchSectionController extends Controller
             'name'            => 'sometimes|string|max:255',
             'course'          => 'nullable|string|max:255',
             'course_code'     => 'nullable|string|max:20',
-            'graduation_year' => 'sometimes|integer|min:2000|max:2100',
+            'graduation_year' => 'sometimes|'.Batch::yearRules(),
             'department'      => 'nullable|string|max:255',
             'description'     => 'nullable|string|max:500',
         ]);
@@ -166,8 +293,9 @@ class BatchSectionController extends Controller
     // GET /api/admin/sections
     public function sectionIndex(Request $request): JsonResponse
     {
+        $people = $this->batches->registeredAccounts();
         $query = Section::query()
-            ->withCount('students')
+            ->campusYears()
             ->with(['batch:id,name,graduation_year', 'adviser:id,first_name,last_name']);
 
         if ($search = $request->get('search')) {
@@ -198,9 +326,17 @@ class BatchSectionController extends Controller
             ->orderBy('department')
             ->orderBy('course')
             ->orderBy('name')
-            ->paginate($request->get('per_page', 20));
+            ->get()
+            ->each(function (Section $section) use ($people) {
+                $section->students_count = $people->filter(
+                    fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                )->count();
+            });
 
-        return response()->json($sections);
+        return response()->json([
+            'data' => $sections,
+            'totals' => $this->batches->directoryTotals(),
+        ]);
     }
 
     // GET /api/admin/sections/{section}
@@ -219,7 +355,7 @@ class BatchSectionController extends Controller
             'name'        => 'required|string|max:255',
             'course'      => 'nullable|string|max:255',
             'department'  => 'nullable|string|max:255',
-            'batch_year'  => 'nullable|integer|min:2000|max:2100',
+            'batch_year'  => Batch::yearRules(false),
             'batch_id'    => 'nullable|exists:batches,id',
             'adviser_id'  => 'nullable|exists:faculty,id',
             'description' => 'nullable|string|max:500',
@@ -249,7 +385,7 @@ class BatchSectionController extends Controller
             'name'        => 'sometimes|string|max:255',
             'course'      => 'nullable|string|max:255',
             'department'  => 'nullable|string|max:255',
-            'batch_year'  => 'nullable|integer|min:2000|max:2100',
+            'batch_year'  => 'sometimes|'.Batch::yearRules(false),
             'batch_id'    => 'nullable|exists:batches,id',
             'adviser_id'  => 'nullable|exists:faculty,id',
             'description' => 'nullable|string|max:500',

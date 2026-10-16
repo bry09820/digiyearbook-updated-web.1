@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -94,6 +95,8 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'is_alumni',
+        'terms_accepted_at',
 
         // Link to yearbook record
         'student_record_id',
@@ -153,6 +156,7 @@ class User extends Authenticatable
         'tier',
         'posts_count',
         'tagged_count',
+        'academic_status',
     ];
     protected function casts(): array
     {
@@ -161,6 +165,8 @@ class User extends Authenticatable
             'password'          => 'hashed',
             'email_verified'    => 'boolean',
             'consent_accepted'  => 'boolean',
+            'is_alumni'         => 'boolean',
+            'terms_accepted_at' => 'datetime',
             'profile_views'     => 'integer',
         ];
     }
@@ -207,9 +213,18 @@ class User extends Authenticatable
         return $this->hasMany(Photo::class);
     }
 
-    public function taggedPhotos(): HasMany
+    /** Face-recognition and legacy manual tag rows. */
+    public function photoTagRecords(): HasMany
     {
         return $this->hasMany(TaggedPhoto::class);
+    }
+
+    /** Photos this user is tagged in (photo_tags pivot). */
+    public function taggedPhotos(): BelongsToMany
+    {
+        return $this->belongsToMany(Photo::class, 'photo_tags', 'user_id', 'photo_id')
+            ->withPivot('tagged_by')
+            ->withTimestamps();
     }
 
     // Convenience helpers 
@@ -447,9 +462,335 @@ class User extends Authenticatable
         return in_array($this->role, [self::ROLE_STUDENT, self::ROLE_ALUMNI], true);
     }
 
+    public static function currentGraduationCutoff(): int
+    {
+        return (int) now()->year;
+    }
+
+    public function resolvedGraduationYear(): ?int
+    {
+        $year = $this->graduation_year;
+
+        if ($year) {
+            return (int) $year;
+        }
+
+        $batch = $this->attributes['batch'] ?? null;
+
+        return is_numeric($batch) && (int) $batch > 1900 ? (int) $batch : null;
+    }
+
+    public function sharesBatchYearWith(User $other): bool
+    {
+        $this->loadMissing('studentRecord');
+        $other->loadMissing('studentRecord');
+
+        $mine = $this->resolvedGraduationYear();
+        $theirs = $other->resolvedGraduationYear();
+
+        return $mine !== null && $theirs !== null && $mine === $theirs;
+    }
+
+    public function canBeViewedBy(?User $viewer): bool
+    {
+        if ($viewer && (int) $viewer->id === (int) $this->id) {
+            return true;
+        }
+
+        $visibility = $this->profile_visibility ?: 'public';
+
+        if ($visibility === 'public') {
+            return true;
+        }
+
+        if (! $viewer || $visibility === 'private') {
+            return false;
+        }
+
+        if ($visibility === 'alumni_only') {
+            return $viewer->isAlumni();
+        }
+
+        if ($visibility === 'batchmates') {
+            return $this->sharesBatchYearWith($viewer);
+        }
+
+        return false;
+    }
+
+    public function visibilityDenialPayload(): array
+    {
+        $visibility = in_array($this->profile_visibility, ['private', 'batchmates', 'alumni_only'], true)
+            ? $this->profile_visibility
+            : 'private';
+
+        $message = match ($visibility) {
+            'batchmates' => 'This profile is visible to students from the same batch year only.',
+            'alumni_only' => 'This profile is visible to alumni only.',
+            default => 'This profile is private.',
+        };
+
+        $student = [
+            'id' => $this->id,
+            'name' => $this->name,
+            'first_name' => $this->first_name,
+            'last_name' => $this->last_name,
+            'profile_picture' => $this->profile_picture,
+            'avatar' => $this->avatar,
+            'role' => $this->role,
+            'is_alumni' => $this->isAlumni(),
+            'academic_status' => $this->academicStatusLabel(),
+        ];
+
+        if ($visibility !== 'private') {
+            $student['course'] = $this->course;
+            $student['graduation_year'] = $this->resolvedGraduationYear();
+            $student['batch'] = $this->batch;
+        }
+
+        return [
+            'message' => $message,
+            'restricted' => true,
+            'visibility' => $visibility,
+            'student' => $student,
+        ];
+    }
+
+    public function scopeWhereGraduationYear($query, int $year)
+    {
+        return $query->where(function ($same) use ($year) {
+            $same->whereHas('studentRecord', fn ($student) => $student->where('graduation_year', $year))
+                ->orWhere(function ($fallback) use ($year) {
+                    $fallback->where(function ($missing) {
+                        $missing->whereDoesntHave('studentRecord', fn ($student) =>
+                            $student->whereNotNull('graduation_year')->where('graduation_year', '>', 0)
+                        );
+                    })->where(function ($columns) use ($year) {
+                        $columns->where('graduation_year', $year)
+                            ->orWhere('batch', (string) $year);
+                    });
+                });
+        });
+    }
+
+    public function scopeVisibleTo($query, ?User $viewer)
+    {
+        return $query->where(function ($visible) use ($viewer) {
+            $visible->where('profile_visibility', 'public')
+                ->orWhereNull('profile_visibility')
+                ->orWhere('profile_visibility', '');
+
+            if (! $viewer) {
+                return;
+            }
+
+            $visible->orWhere('id', $viewer->id);
+
+            $year = $viewer->resolvedGraduationYear();
+            if ($year) {
+                $visible->orWhere(function ($batchmates) use ($year) {
+                    $batchmates->where('profile_visibility', 'batchmates')
+                        ->whereGraduationYear($year);
+                });
+            }
+
+            if ($viewer->isAlumni()) {
+                $visible->orWhere('profile_visibility', 'alumni_only');
+            }
+        });
+    }
+
+    public static function bumpVisibilityEpoch(): void
+    {
+        $next = ((int) \Illuminate\Support\Facades\Cache::get('profile.visibility.epoch', 0)) + 1;
+        \Illuminate\Support\Facades\Cache::forever('profile.visibility.epoch', $next);
+    }
+
+    public function qualifiesByGraduationYear(): bool
+    {
+        $year = $this->resolvedGraduationYear();
+
+        return $year !== null && $year <= self::currentGraduationCutoff();
+    }
+
     public function isAlumni(): bool
     {
-        return $this->role === self::ROLE_ALUMNI;
+        return $this->role === self::ROLE_ALUMNI || (bool) ($this->attributes['is_alumni'] ?? false);
+    }
+
+    public function academicStatusLabel(): string
+    {
+        if ($this->role === self::ROLE_FACULTY) {
+            return 'Faculty';
+        }
+
+        if ($this->role === self::ROLE_ADMIN) {
+            return 'Admin';
+        }
+
+        return $this->isAlumni() ? 'Alumni' : 'Current Student';
+    }
+
+    public function getAcademicStatusAttribute(): string
+    {
+        return $this->academicStatusLabel();
+    }
+
+    /**
+     * Keep an account that was saved as alumni on the alumni role.
+     * Graduation year does not change a current-student registration.
+     */
+    public function applyAlumniIdentity(): void
+    {
+        if (! in_array($this->role, [self::ROLE_STUDENT, self::ROLE_ALUMNI], true)
+            && ! (bool) ($this->attributes['is_alumni'] ?? false)) {
+            return;
+        }
+
+        if (! $this->isAlumni()) {
+            return;
+        }
+
+        if ($this->role === self::ROLE_ALUMNI && (bool) ($this->attributes['is_alumni'] ?? false)) {
+            return;
+        }
+
+        $this->forceFill([
+            'role' => self::ROLE_ALUMNI,
+            'is_alumni' => true,
+        ])->saveQuietly();
+    }
+
+    public function syncIdentityFromGraduationYear(): void
+    {
+        // Batch year and account status are separate. Registration stores the status the person chose.
+    }
+
+    /**
+     * Counts for the admin dashboard, analytics, and user list.
+     * Uses the same non-deleted accounts shown in User Management.
+     */
+    public static function accountCensus(): array
+    {
+        static::promoteGraduatedAccounts();
+
+        $accounts = static::query();
+        $total = (clone $accounts)->count();
+        $students = (clone $accounts)->currentStudents()->count();
+        $alumni = (clone $accounts)->alumni()->count();
+        // Yearbook faculty live in the faculties table, not users.role.
+        $faculty = \App\Models\Faculty::query()->count();
+        $admins = (clone $accounts)->where('role', self::ROLE_ADMIN)->count();
+        $verified = (clone $accounts)->where('email_verified', true)->whereNull('suspended_at')->count();
+        $unverified = (clone $accounts)->where('email_verified', false)->whereNull('suspended_at')->count();
+        $suspended = (clone $accounts)->whereNotNull('suspended_at')->count();
+
+        return [
+            'total_users' => $total,
+            'total_students' => $students,
+            'total_alumni' => $alumni,
+            'faculty_members' => $faculty,
+            'admin_accounts' => $admins,
+            'verified_users' => $verified,
+            'unverified_users' => $unverified,
+            'suspended_users' => $suspended,
+        ];
+    }
+
+    /**
+     * Live accounts only, one tier each. Soft-deleted users are excluded
+     * so dashboard and subscription totals drop as soon as a user is removed.
+     */
+    public static function subscriptionTierCensus(): array
+    {
+        $users = static::query()->get(['id', 'role']);
+        $subscriptions = \App\Models\Subscription::query()
+            ->where('status', 'active')
+            ->get(['user_id', 'tier', 'plan']);
+
+        $premiumIds = [];
+        $standardIds = [];
+        foreach ($subscriptions as $subscription) {
+            $plan = strtolower((string) $subscription->plan);
+            $tier = strtolower((string) $subscription->tier);
+            $isPremium = $tier === 'premium' || str_starts_with($plan, 'premium');
+            if ($isPremium) {
+                $premiumIds[(int) $subscription->user_id] = true;
+            } else {
+                $standardIds[(int) $subscription->user_id] = true;
+            }
+        }
+        foreach (array_keys($premiumIds) as $userId) {
+            unset($standardIds[$userId]);
+        }
+
+        $free = 0;
+        $standard = 0;
+        $premium = 0;
+        $faculty = 0;
+        $admins = 0;
+
+        foreach ($users as $user) {
+            $userId = (int) $user->id;
+            if (isset($premiumIds[$userId])) {
+                $premium++;
+                continue;
+            }
+            if (isset($standardIds[$userId])) {
+                $standard++;
+                continue;
+            }
+            if ($user->role === self::ROLE_FACULTY) {
+                $faculty++;
+                continue;
+            }
+            if ($user->role === self::ROLE_ADMIN) {
+                $admins++;
+                continue;
+            }
+            $free++;
+        }
+
+        return [
+            'total_users' => $users->count(),
+            'free' => $free,
+            'premium_standard' => $standard,
+            'premium' => $premium,
+            'faculty' => $faculty,
+            'admin' => $admins,
+        ];
+    }
+
+    public static function promoteGraduatedAccounts(): void
+    {
+        static::query()
+            ->where('role', self::ROLE_STUDENT)
+            ->where('is_alumni', true)
+            ->update([
+                'role' => self::ROLE_ALUMNI,
+                'is_alumni' => true,
+            ]);
+    }
+
+    public function profileViews()
+    {
+        return $this->hasMany(ProfileView::class, 'viewed_user_id');
+    }
+
+    public function scopeAlumni($query)
+    {
+        return $query->where(function ($alumni) {
+            $alumni->where('role', self::ROLE_ALUMNI)
+                ->orWhere('is_alumni', true);
+        });
+    }
+
+    public function scopeCurrentStudents($query)
+    {
+        return $query->where('role', self::ROLE_STUDENT)
+            ->where(function ($flag) {
+                $flag->whereNull('is_alumni')->orWhere('is_alumni', false);
+            });
     }
 
     public function getPostsCountAttribute(): int
@@ -461,8 +802,6 @@ class User extends Authenticatable
 
     public function getTaggedCountAttribute(): int
     {
-        return \App\Models\TaggedPhoto::where('user_id', $this->id)
-            ->where('status', 'approved')
-            ->count();
+        return app(\App\Services\Analytics\EngagementAnalyticsService::class)->timesTaggedCount($this);
     }
 }

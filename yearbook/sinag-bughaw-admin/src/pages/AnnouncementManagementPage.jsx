@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
 import { announcementsApi } from '@/api/yearbook.api';
-import api from '@/services/api';
 
 const TYPE_CONFIG = {
   graduation:  { bg: '#fffbeb', color: '#b77905', icon: 'fa-graduation-cap', label: 'Graduation'  },
@@ -16,7 +15,6 @@ const EMPTY_FORM = {
   type:         '',
   send_email:   true,
   send_push:    true,
-  email_batch_id: '',
   action_url:   '',
   action_label: '',
 };
@@ -177,8 +175,7 @@ export default function AnnouncementManagementPage({ showToast }) {
   const [submitting,     setSubmitting]     = useState(false);
   const [filterType,     setFilterType]     = useState('all');
   const [searchQuery,    setSearchQuery]    = useState('');
-  const [recipientCount, setRecipientCount] = useState(0);
-  const [batches,        setBatches]        = useState([]);
+  const [recipientCount, setRecipientCount] = useState(null);
   const [editingId,      setEditingId]      = useState(null);
 
   const fetchAnnouncements = useCallback(() => {
@@ -189,26 +186,21 @@ export default function AnnouncementManagementPage({ showToast }) {
       .finally(() => setLoading(false));
   }, [showToast]);
 
-  const fetchRecipientCount = useCallback((batchId = '') => {
-    announcementsApi.recipientCount?.(batchId ? { batch_id: batchId } : {})
-      .then(({ data }) => setRecipientCount(data.count ?? data))
+  const fetchRecipientCount = useCallback(() => {
+    announcementsApi.recipientCount?.()
+      .then(({ data }) => setRecipientCount(Number(data.count ?? data ?? 0)))
       .catch(() => {});
   }, []);
 
-  const fetchBatches = useCallback(() => {
-    api.get('/admin/batches', { params: { per_page: 100 } })
-      .then(({ data }) => setBatches(data.data ?? data))
-      .catch(() => showToast?.('Failed to load batches.', 'error'));
-  }, [showToast]);
-
   useEffect(() => {
     fetchAnnouncements();
-    fetchBatches();
-  }, [fetchAnnouncements, fetchBatches]);
+  }, [fetchAnnouncements]);
 
   useEffect(() => {
-    fetchRecipientCount(form.email_batch_id);
-  }, [fetchRecipientCount, form.email_batch_id]);
+    fetchRecipientCount();
+    const timer = window.setInterval(fetchRecipientCount, 8000);
+    return () => window.clearInterval(timer);
+  }, [fetchRecipientCount]);
 
   const filtered = items.filter(a => {
     const matchType  = filterType === 'all' || a.type === filterType;
@@ -222,19 +214,11 @@ export default function AnnouncementManagementPage({ showToast }) {
     urgent:   items.filter(a => a.type === 'urgent').length,
     pushSent: items.filter(a => a.send_push).length,
   };
-  const selectedEmailBatch = batches.find(b => String(b.id) === String(form.email_batch_id));
-
   const setField = (key, val) => setForm(f => ({ ...f, [key]: val }));
-  const setEmailBatch = (batchId) => {
-    setForm(f => ({ ...f, email_batch_id: batchId }));
-  };
 
   const handleSubmit = async () => {
     if (!form.title.trim()) return showToast?.('Title is required.', 'error');
     if (!form.body.trim())  return showToast?.('Message body is required.', 'error');
-    if (form.send_email && !form.email_batch_id) {
-      return showToast?.('Choose the batch that will receive the email.', 'error');
-    }
 
     const resolvedType = defaultAnnouncementType(form);
 
@@ -245,8 +229,7 @@ export default function AnnouncementManagementPage({ showToast }) {
         body:         form.body.trim(),
         type:         resolvedType,
         send_push:    form.send_push,
-        send_email:   form.send_email,
-        email_batch_id: form.send_email ? form.email_batch_id : null,
+        send_email:   editingId ? false : form.send_email,
         action_url:   form.action_url.trim()   || null,
         action_label: form.action_label.trim() || null,
       };
@@ -262,8 +245,11 @@ export default function AnnouncementManagementPage({ showToast }) {
       setForm(EMPTY_FORM);
       setEditingId(null);
       fetchAnnouncements();
+      fetchRecipientCount();
     } catch (e) {
-      showToast?.(e?.response?.data?.message ?? 'Failed to save announcement.', 'error');
+      const errors = e?.response?.data?.errors ?? {};
+      const fieldMessage = Object.values(errors).flat()[0];
+      showToast?.(fieldMessage || e?.response?.data?.message || 'Failed to save announcement.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -277,7 +263,6 @@ export default function AnnouncementManagementPage({ showToast }) {
       type:         ann.type ?? '',
       send_email:   false,
       send_push:    Boolean(ann.send_push),
-      email_batch_id: '',
       action_url:   ann.action_url ?? '',
       action_label: ann.action_label ?? '',
     });
@@ -336,17 +321,15 @@ export default function AnnouncementManagementPage({ showToast }) {
             </p>
           </div>
         </div>
-        {recipientCount > 0 && (
-          <div style={{
-            background: '#eef2ff', borderRadius: '12px', padding: '8px 16px',
-            color: '#3f51b5', fontSize: '13px', fontWeight: 600,
-            display: 'flex', alignItems: 'center', gap: '8px',
-            border: '1px solid #c7d2fe',
-          }}>
-            <i className="fas fa-users" style={{ color: '#3f51b5' }} />
-            {recipientCount.toLocaleString()} {selectedEmailBatch ? `${selectedEmailBatch.name} email recipient${recipientCount === 1 ? '' : 's'}` : 'enrolled students'}
-          </div>
-        )}
+        <div style={{
+          background: '#eef2ff', borderRadius: '12px', padding: '8px 16px',
+          color: '#3f51b5', fontSize: '13px', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: '8px',
+          border: '1px solid #c7d2fe',
+        }}>
+          <i className="fas fa-users" style={{ color: '#3f51b5' }} />
+          {recipientCount == null ? 'Loading students…' : `${recipientCount.toLocaleString()} registered student${recipientCount === 1 ? '' : 's'}`}
+        </div>
       </div>
 
       <div style={{ padding: '20px 32px 28px', maxWidth: '1280px', margin: '0 auto' }}>
@@ -477,40 +460,19 @@ export default function AnnouncementManagementPage({ showToast }) {
               <Toggle
                 checked={form.send_email}
                 onChange={v => setField('send_email', v)}
-                label="Send email to selected batch"
+                label="Email registered students"
                 icon="fa-envelope"
               />
-              {form.send_email && (
-                <div style={{ margin: '8px 0 12px 28px' }}>
-                  <label style={{ display: 'block', fontSize: '10px', fontWeight: 800, color: '#94a3b8',
-                    textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '6px' }}>
-                    Email recipient batch *
-                  </label>
-                  <select
-                    className="ann-input"
-                    value={form.email_batch_id}
-                    onChange={e => setEmailBatch(e.target.value)}
-                    style={{ cursor: 'pointer', background: '#fff' }}
-                  >
-                    <option value="">Choose batch to email</option>
-                    {batches.map(batch => (
-                      <option key={batch.id} value={batch.id}>
-                        {batch.name} {batch.graduation_year ? `- ${batch.graduation_year}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <p style={{ margin: '7px 0 0', fontSize: '11px', color: form.email_batch_id ? '#64748b' : '#dc2626', fontWeight: 700 }}>
-                    {form.email_batch_id
-                      ? `${recipientCount.toLocaleString()} email recipient${recipientCount === 1 ? '' : 's'} in this batch.`
-                      : 'Select a batch so the email will not be sent to all students.'}
-                  </p>
-                </div>
+              {form.send_email && !editingId && (
+                <p style={{ margin: '0 0 8px 28px', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>
+                  Sends to {recipientCount == null ? 'registered students' : `${recipientCount.toLocaleString()} registered student account${recipientCount === 1 ? '' : 's'}`} with an email address.
+                </p>
               )}
               <div style={{ height: '1px', background: '#e2e8f0', margin: '4px 0' }} />
               <Toggle
                 checked={form.send_push}
                 onChange={v => setField('send_push', v)}
-                label="Send push notification"
+                label="In-app notification"
                 icon="fa-bell"
               />
             </div>

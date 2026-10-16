@@ -1,11 +1,8 @@
 import { useState } from 'react';
-import { useAppConfig } from '@/features/platform/AppConfigProvider';
 
 export default function PostCard({ post, onClick, isOwn, onMenuClick, onReportClick }) {
-  const { isOn } = useAppConfig();
-  const showReactions = isOn('allow_reactions');
-  const showComments = isOn('allow_comments');
   const [activeIdx, setActiveIdx] = useState(0);
+  const viewsCount = Number(post.views_count ?? post.views ?? 0);
 
   const media      = post.media ?? [];
   const mediaCount = media.length || 1;
@@ -57,37 +54,30 @@ export default function PostCard({ post, onClick, isOwn, onMenuClick, onReportCl
       )}
 
       {/* Tagged badge */}
-      {post.tagged_students?.length > 0 && (
-        <div className="absolute top-2 left-2 bg-[#1d2b4b]/75 backdrop-blur-sm rounded-md px-1.5 py-0.5 flex items-center gap-1 z-[3]">
+      {(post.tagged_users?.length > 0 || post.tagged_students?.length > 0) && (
+        <div className="absolute top-2 left-2 max-w-[80%] bg-[#1d2b4b]/75 backdrop-blur-sm rounded-md px-1.5 py-0.5 flex items-center gap-1 z-[3]">
           <i className="fas fa-user-tag text-[#fdb813] text-[9px]" />
-          <span className="text-white text-[10px] font-bold">{post.tagged_students.length}</span>
+          <span className="text-white text-[10px] font-bold truncate">
+            {(post.tagged_users ?? post.tagged_students).map(person => person.name).filter(Boolean).join(', ')}
+          </span>
         </div>
       )}
 
-      {/* Hover overlay */}
-      {(showReactions || showComments) && (
-        <div className="post-overlay absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200
-                        flex items-center justify-center gap-5 z-[2]">
-          {showReactions && (
-            <span className="text-white text-sm font-bold">
-              <i className="fas fa-heart text-[#fdb813] mr-1" />0
-            </span>
-          )}
-          {showComments && (
-            <span className="text-white text-sm font-bold">
-              <i className="fas fa-comment text-[#fdb813] mr-1" />0
-            </span>
-          )}
-        </div>
-      )}
+      <div className="post-overlay absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200
+                      flex items-center justify-center z-[2]">
+        <span className="text-white text-sm font-bold">
+          <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
+          {Number.isFinite(viewsCount) ? viewsCount.toLocaleString() : '0'}
+        </span>
+      </div>
 
       {/* Owner menu button */}
       {isOwn && (
         <button
-          className="ig-menu-btn absolute bottom-2 right-2 w-7 h-7 rounded-lg
+          className="ig-menu-btn absolute bottom-2 right-2 z-20 w-7 h-7 rounded-lg
                      bg-[#1d2b4b]/75 backdrop-blur-sm border border-white/10
                      text-white cursor-pointer flex items-center justify-center
-                     text-xs opacity-100 transition-opacity duration-200 z-[4]"
+                     text-xs opacity-100 pointer-events-auto"
           onClick={e => { e.stopPropagation(); onMenuClick?.(e, post); }}
         >
           <i className="fas fa-ellipsis-v" />
@@ -115,7 +105,7 @@ export default function PostCard({ post, onClick, isOwn, onMenuClick, onReportCl
 
       {/* Caption overlay */}
       {post.caption && (
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#1d2b4b]/85 to-transparent
+        <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#1d2b4b]/85 to-transparent
                         px-2.5 pb-2 pt-6 text-[11px] text-white font-medium leading-tight z-[3]">
           {post.caption.length > 38 ? post.caption.slice(0, 38) + '…' : post.caption}
         </div>

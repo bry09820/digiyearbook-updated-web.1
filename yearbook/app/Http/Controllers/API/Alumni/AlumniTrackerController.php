@@ -22,9 +22,12 @@ class AlumniTrackerController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        User::promoteGraduatedAccounts();
+
         $query = User::query()
             ->with(['section', 'batchRecord', 'careerProfile', 'studentRecord.section', 'studentRecord.batch'])
-            ->where('role', User::ROLE_ALUMNI);
+            ->alumni()
+            ->visibleTo($request->user());
 
         if ($q = $request->string('q')->trim()->value()) {
             $query->where('name', 'like', "%{$q}%");
@@ -57,8 +60,12 @@ class AlumniTrackerController extends Controller
     public function show(int $id): JsonResponse
     {
         $user = User::with(['section', 'batchRecord', 'careerProfile', 'studentRecord.section', 'studentRecord.batch'])
-            ->where('role', User::ROLE_ALUMNI)
+            ->alumni()
             ->findOrFail($id);
+
+        if (! $user->canBeViewedBy(Auth::user())) {
+            return response()->json($user->visibilityDenialPayload(), 403);
+        }
 
         return response()->json([
             'success' => true,
@@ -95,7 +102,7 @@ class AlumniTrackerController extends Controller
 
         if (! $user?->isAlumni()) {
             throw ValidationException::withMessages([
-                'role' => 'Career profiles are available after your batch is archived and your account is marked as alumni.',
+                'role' => 'Career profiles are available to alumni. A graduation year in the current year or earlier marks an account as alumni.',
             ]);
         }
 
@@ -115,7 +122,8 @@ class AlumniTrackerController extends Controller
     public function byBatch(int $batchId): JsonResponse
     {
         $users = User::with(['section', 'batchRecord', 'careerProfile', 'studentRecord.section', 'studentRecord.batch'])
-            ->where('role', User::ROLE_ALUMNI)
+            ->alumni()
+            ->visibleTo(Auth::user())
             ->where(function ($query) use ($batchId) {
                 $query->where('batch_id', $batchId)
                     ->orWhereHas('studentRecord', fn ($student) => $student->where('batch_id', $batchId));
@@ -140,7 +148,8 @@ class AlumniTrackerController extends Controller
         }
 
         $results = User::with(['section', 'batchRecord', 'careerProfile', 'studentRecord.section', 'studentRecord.batch'])
-            ->where('role', User::ROLE_ALUMNI)
+            ->alumni()
+            ->visibleTo($request->user())
             ->where('name', 'like', "%{$q}%")
             ->orderBy('name')
             ->limit(10)
@@ -237,6 +246,9 @@ class AlumniTrackerController extends Controller
             'section'         => $section?->name,
             'course'          => $user->course,
             'graduation_year' => $user->graduation_year,
+            'role'            => $user->role,
+            'is_alumni'       => $user->isAlumni(),
+            'academic_status' => $user->academicStatusLabel(),
             'is_verified'     => (bool) $user->email_verified_at,
             'career'          => $career ? [
                 'job_title' => $career->job_title,

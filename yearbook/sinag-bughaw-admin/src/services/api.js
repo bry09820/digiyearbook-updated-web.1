@@ -18,6 +18,15 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("admin_token");
     if (token) config.headers.Authorization = `Bearer ${token}`;
+
+    const url = String(config.url ?? "");
+    const method = String(config.method ?? "get").toLowerCase();
+    if (method === "get" && (url.includes("/admin/dashboard") || url.includes("/admin/analytics") || url.includes("/admin/notifications"))) {
+      config.headers["Cache-Control"] = "no-cache";
+      config.headers.Pragma = "no-cache";
+      config.params = { ...(config.params ?? {}), _: Date.now() };
+    }
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -51,5 +60,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export function notifyAdminAccountsChanged() {
+  window.dispatchEvent(new CustomEvent("admin-users-changed"));
+}
 
 export default api;

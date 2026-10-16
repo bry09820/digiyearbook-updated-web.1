@@ -3,13 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth }             from '@/features/auth/hooks/useAuth';
 import { authApi, consentApi } from '@/api/auth.api';
 import ConsentModal             from '../components/ConsentModal';
-
-const STATS = [
-  // TODO before launch: replace these static stats with real API counts from the backend.
-  { value: '12,500+', label: 'Graduates' },
-  { value: '35+',     label: 'Programs'  },
-  { value: '50k+',    label: 'Photos'    },
-];
+import { usePlatformStats } from '@/utils/platformStats';
 
 const maskEmail = (value) => {
   const [local, domain] = value.split('@');
@@ -18,6 +12,7 @@ const maskEmail = (value) => {
 };
 
 export default function LoginPage() {
+  const stats = usePlatformStats();
   const { loginCredentials, setToken } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -79,6 +74,9 @@ export default function LoginPage() {
       const { data } = await authApi.verifyOtp(email, code);
       const token = data.access_token || data.token;
       if (!token) throw new Error('Missing access token');
+      if (data.session_notice) {
+        window.alert(data.session_notice);
+      }
       await setToken(token);
       const { data: consent } = await consentApi.status();
       if (!consent.accepted) setShowConsent(true);
@@ -139,7 +137,7 @@ export default function LoginPage() {
             </p>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            {STATS.map(({ value, label }) => (
+            {stats.map(({ value, label }) => (
               <div key={label} className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-center border border-white/10">
                 <p className="text-[#fdb813] font-black text-xl m-0 leading-none">{value}</p>
                 <p className="text-white/55 text-xs m-0 mt-1.5">{label}</p>

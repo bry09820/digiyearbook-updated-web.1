@@ -462,9 +462,10 @@ export default function DashboardPage() {
   const [lastRefresh, setLastRefresh] = useState(null);
 
   const load = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
+    const silent = isRefresh === "silent";
+    if (isRefresh === true) setRefreshing(true);
+    else if (!silent) setLoading(true);
+    if (!silent) setError(null);
     try {
       const res = await api.get(DASHBOARD_API_PATH);
       setData(res.data);
@@ -474,10 +475,10 @@ export default function DashboardPage() {
         err.response?.data?.error ??
         err.message ??
         "Failed to load dashboard data.";
-      setError(msg);
+      if (!silent) setError(msg);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!silent) setLoading(false);
+      if (isRefresh === true) setRefreshing(false);
       setLastRefresh(
         new Date().toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }),
       );
@@ -486,9 +487,32 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const refresh = () => load(true);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const timer = window.setInterval(() => load("silent"), 8000);
+    window.addEventListener("admin-users-changed", refresh);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("admin-users-changed", refresh);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
+
   // Enrich metric cards with icon/color config matching the design system
   const ICON_MAP = {
-    "Total Students":       { icon: "fa-user-graduate", iconBg: "#d1fae5", iconColor: "#065f46", subBg: "#d1fae5", subColor: "#065f46" },
+    "Registered Users":     { icon: "fa-users", iconBg: "#dbeafe", iconColor: "#1d4ed8", subBg: "#dbeafe", subColor: "#1d4ed8" },
+    "Current Students":     { icon: "fa-user-graduate", iconBg: "#e0f2fe", iconColor: "#0369a1", subBg: "#e0f2fe", subColor: "#0369a1" },
+    "Alumni":               { icon: "fa-user-check", iconBg: "#fef3c7", iconColor: "#92400e", subBg: "#fef3c7", subColor: "#92400e" },
+    "Verified":             { icon: "fa-circle-check", iconBg: "#d1fae5", iconColor: "#065f46", subBg: "#d1fae5", subColor: "#065f46" },
+    "Unverified":           { icon: "fa-clock", iconBg: "#ffedd5", iconColor: "#9a3412", subBg: "#ffedd5", subColor: "#9a3412" },
+    "Batches":              { icon: "fa-graduation-cap", iconBg: "#e0e7ff", iconColor: "#3730a3", subBg: "#e0e7ff", subColor: "#3730a3" },
+    "Sections":             { icon: "fa-layer-group", iconBg: "#ede9fe", iconColor: "#5b21b6", subBg: "#ede9fe", subColor: "#5b21b6" },
     "Faculty Members":      { icon: "fa-chalkboard-user",iconBg: "#ede9fe", iconColor: "#4338ca", subBg: "#ede9fe", subColor: "#4338ca" },
     "Gallery Photos":       { icon: "fa-images",        iconBg: "#fef3c7", iconColor: "#92400e", subBg: "#fef3c7", subColor: "#92400e" },
     "Active Subscriptions": { icon: "fa-crown",         iconBg: "#ede9fe", iconColor: "#4338ca", subBg: "#ede9fe", subColor: "#4338ca" },

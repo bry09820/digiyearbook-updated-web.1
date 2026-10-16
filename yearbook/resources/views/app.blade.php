@@ -8,8 +8,13 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     @php
-      $spaJs = collect(glob(public_path('assets/index-*.js')))->sort()->last();
-      $spaCss = collect(glob(public_path('assets/index-*.css')))->sort()->last();
+      $newestAsset = function (string $pattern) {
+          $files = glob(public_path($pattern)) ?: [];
+          usort($files, fn ($a, $b) => filemtime($b) <=> filemtime($a));
+          return $files[0] ?? null;
+      };
+      $spaJs = $newestAsset('assets/index-*.js');
+      $spaCss = $newestAsset('assets/index-*.css');
       $viteHot = file_exists(public_path('hot'))
         ? trim(file_get_contents(public_path('hot')))
         : null;

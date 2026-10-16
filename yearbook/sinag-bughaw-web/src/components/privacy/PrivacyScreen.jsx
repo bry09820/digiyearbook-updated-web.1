@@ -1,16 +1,17 @@
 import { Lock } from "lucide-react";
 import { usePrivacyProtection } from "@/hooks/usePrivacyProtection";
 
-export default function PrivacyScreen() {
-  const hidden = usePrivacyProtection();
+export default function PrivacyScreen({ enabled = true }) {
+  const hidden = usePrivacyProtection(enabled);
+  if (!enabled) return null;
 
   return (
     <div
+      id="sb-privacy-shield"
       aria-hidden={!hidden}
       className={[
-        "fixed inset-0 z-[2147483647] grid place-items-center overflow-hidden",
-        "bg-[#071633] transition-opacity duration-150",
-        hidden ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none",
+        "fixed inset-0 z-[2147483647] grid place-items-center overflow-hidden bg-[#071633]",
+        hidden ? "visible opacity-100 pointer-events-auto" : "invisible opacity-0 pointer-events-none",
       ].join(" ")}
     >
       <div

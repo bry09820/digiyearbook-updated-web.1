@@ -5,7 +5,7 @@ const SECTIONS = [
     icon: 'fa-database',
     title: 'Data We Collect',
     color: 'bg-indigo-50 text-indigo-600',
-    body: 'We collect your name, email address, student ID, course, profile photo, yearbook quote, and any content you upload (voice notes, gallery photos). This data is provided by you during registration and profile setup.',
+    body: 'We collect your name, email address, student ID, course, profile photo, yearbook quote, and any content you upload, including gallery photos. This data is provided by you during registration and profile setup.',
   },
   {
     icon: 'fa-cogs',

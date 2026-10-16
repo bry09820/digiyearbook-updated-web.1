@@ -36,10 +36,15 @@ export const COURSE_LABELS = Object.fromEntries(
   COURSES.filter(c => c.value).map(c => [c.value, c.label])
 );
 
+export const MIN_BATCH_YEAR = 2022;
+
+/** Latest selectable batch is the current calendar year. */
+export const MAX_BATCH_YEAR = new Date().getFullYear();
+
 export const YEAR_OPTIONS = Array.from(
-  { length: 10 },
-  (_, i) => new Date().getFullYear() - i
-);
+  { length: MAX_BATCH_YEAR - MIN_BATCH_YEAR + 1 },
+  (_, i) => MAX_BATCH_YEAR - i
+).filter((year) => year >= MIN_BATCH_YEAR && year <= MAX_BATCH_YEAR);
 
 // Batch API
 

@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 const APP_BASE = import.meta.env.VITE_APP_URL || API_BASE.replace(/\/api\/?$/, '');
 
 export function imageUrl(path) {
-  if (!path) return null;
+  if (!path || typeof path !== 'string') return null;
   if (
     path.startsWith('http://') ||
     path.startsWith('https://') ||

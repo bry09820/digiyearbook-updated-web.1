@@ -208,11 +208,16 @@ export default function AnalyticsPage() {
   const [loadingEngagement, setLoadingEngagement] = useState(true);
   const [loadingPresence,   setLoadingPresence]   = useState(true);
 
-  useEffect(() => {
+  const loadOverview = useCallback(() => {
+    setLoadingOverview(true);
     api.get("/admin/analytics/overview")
       .then(r => setOverview(r.data))
       .catch(() => {})
       .finally(() => setLoadingOverview(false));
+  }, []);
+
+  useEffect(() => {
+    loadOverview();
 
     api.get("/admin/analytics/top-profiles", { params: { limit: 10 } })
       .then(r => setTopProfiles(r.data.data ?? []))
@@ -233,7 +238,22 @@ export default function AnalyticsPage() {
       .then(r => setPresence(r.data.data ?? []))
       .catch(() => {})
       .finally(() => setLoadingPresence(false));
-  }, []);
+  }, [loadOverview]);
+
+  useEffect(() => {
+    const refresh = () => loadOverview();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("admin-users-changed", refresh);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("admin-users-changed", refresh);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [loadOverview]);
 
   const fetchTrend = useCallback((days) => {
     setLoadingTrend(true);
@@ -268,10 +288,40 @@ export default function AnalyticsPage() {
         </div>
       ) : overview && (
         <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
-          <StatCard toneClass="text-indigo-600" label="Total Users" value={overview.total_users?.toLocaleString()} sub="Registered students" />
+          <StatCard toneClass="text-indigo-600" label="Registered Users" value={overview.total_users?.toLocaleString()} sub="Matches User Management" />
+          <StatCard toneClass="text-sky-600" label="Current Students" value={overview.total_students?.toLocaleString()} sub="Same student filter" />
+          <StatCard toneClass="text-amber-600" label="Alumni" value={overview.total_alumni?.toLocaleString()} sub="Same alumni filter" />
+          <StatCard toneClass="text-emerald-600" label="Verified" value={overview.verified_users?.toLocaleString()} sub="Verified and active" />
+          <StatCard toneClass="text-orange-600" label="Unverified" value={overview.unverified_users?.toLocaleString()} sub="Not yet verified" />
+          <StatCard toneClass="text-sky-600" label="Enrolled" value={overview.enrolled_students?.toLocaleString()} sub="Student records in a section" />
           <StatCard toneClass="text-violet-600" label="Total Views" value={overview.total_views?.toLocaleString()} sub="Profiles and content" />
           <StatCard toneClass="text-emerald-600" label="Views Today" value={overview.views_today?.toLocaleString()} sub="Last 24 hours" />
           <StatCard toneClass="text-emerald-600" label="Online Now" value={overview.online_now?.toLocaleString()} sub="Active users" />
+        </div>
+      )}
+
+      {overview?.by_section?.length > 0 && (
+        <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <Section title="Students by section">
+            <ul className="m-0 max-h-64 list-none space-y-2 overflow-auto p-0 text-sm">
+              {overview.by_section.map((section) => (
+                <li key={section.id} className="flex justify-between gap-3 border-b border-slate-100 pb-2">
+                  <span>{section.name}{section.course ? ` · ${section.course}` : ""}</span>
+                  <span className="font-bold">{section.students_count}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+          <Section title="Students by batch">
+            <ul className="m-0 max-h-64 list-none space-y-2 overflow-auto p-0 text-sm">
+              {(overview.by_batch ?? []).map((batch) => (
+                <li key={batch.id} className="flex justify-between gap-3 border-b border-slate-100 pb-2">
+                  <span>{batch.name}{batch.graduation_year ? ` · ${batch.graduation_year}` : ""}</span>
+                  <span className="font-bold">{batch.students_count}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
         </div>
       )}
 
@@ -306,7 +356,6 @@ export default function AnalyticsPage() {
               data={[
                 { label: "Photos", value: engagement.photos ?? 0 },
                 { label: "Videos", value: engagement.videos ?? 0 },
-                { label: "Voice Notes", value: engagement.voice_notes ?? 0 },
                 { label: "Messages", value: engagement.messages ?? 0 },
                 { label: "Tags", value: engagement.tags ?? 0 },
               ]}

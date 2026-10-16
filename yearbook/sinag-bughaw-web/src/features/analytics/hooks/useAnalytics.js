@@ -26,8 +26,8 @@ function useAsync(fetchFn) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
 
-  const run = useCallback(() => {
-    setLoading(true);
+  const run = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     fetchFn()
       .then(setData)
@@ -67,7 +67,11 @@ export function useTopViewed(limit = 10) {
 export function useTrending(limit = 10) {
   const fn = useCallback(() => getTrending(limit), [limit]);
   const result = useAsync(fn);
-  return { ...result, data: result.data?.data ?? [] };
+  return {
+    ...result,
+    data: result.data?.data ?? [],
+    viewsThisWeek: Number(result.data?.views_this_week ?? 0),
+  };
 }
 
 /**

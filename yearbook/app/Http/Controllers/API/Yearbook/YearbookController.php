@@ -346,6 +346,7 @@ class YearbookController extends Controller
         );
 
         $filename = "yearbook-{$batch->year}.pdf";
+        $yearbook->increment('download_count');
         $this->downloadAudit->record(
             $request,
             'yearbook_pdf_download',

@@ -120,7 +120,7 @@ export default function FacultyPage() {
         </div>
       </header>
 
-      {!loading && !search && groups.length > 1 && (
+      {!search && groups.length > 1 && (
         <nav className="border-b border-slate-200 bg-white px-5 py-3 shadow-sm sm:px-[8%]" aria-label="Filter by department">
           <div className="mx-auto max-w-[1180px]">
             <FilterTabStrip
@@ -141,7 +141,7 @@ export default function FacultyPage() {
       )}
 
       <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 py-8 sm:px-8">
-        {loading ? (
+        {loading && visibleGroups.length === 0 ? (
           <LoadingSkeleton variant="card" count={6} />
         ) : error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700" role="alert">

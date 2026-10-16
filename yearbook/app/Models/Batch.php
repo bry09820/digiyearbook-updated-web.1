@@ -47,7 +47,34 @@ class Batch extends Model
         return $this->graduation_year;
     }
 
-    // Scopes 
+    /**
+     * NU Lipa opened in 2022. Batch years run from that year through the current calendar year.
+     */
+    public const MIN_YEAR = 2022;
+
+    public static function maxYear(): int
+    {
+        return (int) now()->year;
+    }
+
+    public static function yearAllowed(int $year): bool
+    {
+        return $year >= self::MIN_YEAR && $year <= self::maxYear();
+    }
+
+    public static function yearRules(bool $required = true): string
+    {
+        $presence = $required ? 'required' : 'nullable';
+
+        return $presence.'|integer|min:'.self::MIN_YEAR.'|max:'.self::maxYear();
+    }
+
+    // Scopes
+    public function scopeCampusYears($query)
+    {
+        return $query->whereBetween('graduation_year', [self::MIN_YEAR, self::maxYear()]);
+    }
+
     public function scopeByYear($query, int $year)
     {
         return $query->where('graduation_year', $year);

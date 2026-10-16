@@ -48,11 +48,9 @@ function Skeleton({ className = "", style }) {
 function FileTypeChip({ type }) {
   const styles = {
     photo: "bg-indigo-50 text-indigo-700",
-    voice: "bg-emerald-50 text-emerald-700",
   };
   const labels = {
     photo: "PHOTO",
-    voice: "VOICE",
   };
   return (
     <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
@@ -347,7 +345,6 @@ function UploadLogsTab() {
         >
           <option value="">All Types</option>
           <option value="photo">Photo</option>
-          <option value="voice">Voice Note</option>
         </Select>
       </FilterBar>
 

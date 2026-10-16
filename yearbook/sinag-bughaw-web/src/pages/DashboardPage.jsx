@@ -4,7 +4,7 @@
  * Instagram-style feed dashboard.
  * - 3-column desktop layout: left sidebar | feed | right sidebar
  * - Posts fetched from GET /api/feed?filter=all|public|batchmates|mine
- * - Visibility: public posts + batchmates posts (same batch_id) + own posts
+ * - Visibility: public posts + same-year batchmate posts + posts the viewer is tagged in + own posts
  * No likes, no comments view count + tag students only
  * Tag modal POST /api/students/profile/tagged-photos
  * - Uses existing Navbar + Footer from your codebase
@@ -18,6 +18,7 @@ import { searchApi }                                 from '@/api/search.api';
 import { profileApi }                                from '@/api/profile.api';
 import { storageUrl }                                from '@/api/client';
 import axios                                         from '@/api/client';
+import PostContextMenu                               from '@/features/profile/components/PostContextMenu';
 import Navbar                                        from '@/components/layout/Navbar';
 import Footer                                        from '@/components/layout/Footer';
 import LoadingSkeleton                               from '@/components/ui/LoadingSkeleton';
@@ -126,7 +127,7 @@ function PostMediaGrid({ media }) {
           : <img   src={getUrl(m.file_path)} alt={m.caption ?? 'post'}
               className="w-full h-full object-contain block"
               loading="lazy"
-              onError={e => { e.currentTarget.src = 'https://via.placeholder.com/800x480?text=Photo'; }}
+              onError={e => { e.currentTarget.style.display = 'none'; }}
             />
         }
       </div>
@@ -150,7 +151,7 @@ function PostMediaGrid({ media }) {
           : <img src={getUrl(m.file_path)} alt={`slide ${current + 1}`}
               className="w-full h-full object-contain block"
               loading="lazy"
-              onError={e => { e.currentTarget.src = 'https://via.placeholder.com/800x480?text=Photo'; }}
+              onError={e => { e.currentTarget.style.display = 'none'; }}
             />
         }
       </div>
@@ -371,7 +372,7 @@ function TagModal({ photoId, existingTags = [], batchmates = [], onClose, onSave
 // FIX: onTagSaved now receives the full tagged_students array from the server,
 // not a list of IDs. Passed straight through to TagModal's onSaved prop.
 
-function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onReport }) {
+function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onReport, onMenuClick }) {
   const [tagOpen, setTagOpen] = useState(false);
   const cardRef = useRef(null);
   const viewedRef = useRef(false);
@@ -434,6 +435,16 @@ function PostCard({ post, currentUser, batchmates, onTagSaved, onViewed, onRepor
             </div>
           </div>
           <span className="text-[11px] text-slate-400 flex-shrink-0">{post.time_ago ?? ''}</span>
+          {isOwn && (
+            <button
+              type="button"
+              aria-label="Post options"
+              onClick={(event) => onMenuClick?.(event, post)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer hover:bg-slate-100"
+            >
+              <i className="fas fa-ellipsis-v text-xs" />
+            </button>
+          )}
         </div>
 
         {/* Media */}
@@ -540,7 +551,6 @@ function LeftSidebar({ user, isOn }) {
     { to: '/sections',    icon: 'fa-layer-group',       label: 'Sections'   },
     { to: '/discover',    icon: 'fa-compass',           label: 'Discovery'  },
     { to: '/messages',    icon: 'fa-comment-dots',      label: 'Messages'   },
-    { to: '/voice-notes', icon: 'fa-microphone',        label: 'Voice Notes'},
     { to: '/analytics',   icon: 'fa-chart-bar',         label: 'Analytics'  },
     { to: '/flipbook',    icon: 'fa-book-open',         label: 'Flipbook',    feature: 'enable_flipbook_viewer' },
   ].filter(n => {
@@ -772,7 +782,7 @@ function RightSidebar({ batchmates, batchStats, topViewed, currentUser, memories
           {topViewed.slice(0, 5).map((s, i) => {
             const avatar = storageUrl(s.profile_picture)
               || `https://ui-avatars.com/api/?name=${encodeURIComponent(s.name)}&background=1d2b4b&color=fdb813&size=64`;
-            const views = s.views_this_week ?? s.views ?? s.total_views ?? 0;
+            const views = Number(s.views_this_week ?? s.views ?? s.total_views ?? 0);
             return (
               <Link key={s.id} to={`/students/${s.id}`}
                 className="flex items-center gap-2.5 py-2 no-underline group">
@@ -821,12 +831,12 @@ function RightSidebar({ batchmates, batchStats, topViewed, currentUser, memories
       {batchStats && (
         <div className="bg-[#1d2b4b] rounded-2xl p-4">
           <p className="text-[11px] font-bold tracking-widest uppercase text-[#fdb813]/70 mb-3">
-            Batch {batchStats.year} stats
+            Directory
           </p>
           {[
-            { label: 'Graduates',       value: batchStats.total_students  },
-            { label: 'Photos uploaded', value: batchStats.total_photos    },
-            { label: 'Posts this week', value: batchStats.posts_this_week },
+            { label: 'Students', value: batchStats.total_students },
+            { label: 'Alumni',   value: batchStats.total_alumni },
+            { label: 'Faculty',  value: batchStats.faculty_members },
           ].map(({ label, value }) => (
             <div key={label} className="flex justify-between items-center py-1.5">
               <span className="text-[12px] text-white/50">{label}</span>
@@ -854,7 +864,28 @@ export default function DashboardPage() {
   const [batchmates,  setBatchmates]  = useState([]);
   const [topViewed,   setTopViewed]   = useState([]);
   const [memories,    setMemories]    = useState([]);
-  const [batchStats]  = useState(null);
+  const [batchStats, setBatchStats] = useState(null);
+
+  useEffect(() => {
+    let stopped = false;
+    const loadCensus = async () => {
+      try {
+        const { data } = await axios.get('/faculty/census');
+        if (!stopped) setBatchStats(data);
+      } catch {
+        // Keep the last live counts if a refresh fails.
+      }
+    };
+    loadCensus();
+    const timer = window.setInterval(loadCensus, 8000);
+    const onFocus = () => loadCensus();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
 
   // Search state
   const [query,      setQuery]      = useState('');
@@ -964,6 +995,13 @@ export default function DashboardPage() {
       p.id !== postId ? p : { ...p, views_count: viewsCount }
     ));
   }, []);
+
+  const [postMenu, setPostMenu] = useState(null);
+
+  const handlePostDeleted = (postId) => {
+    setPosts(prev => prev.filter(item => String(item.id) !== String(postId)));
+    setPostMenu(null);
+  };
 
   const handleReportPost = async (post) => {
     try {
@@ -1088,7 +1126,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Posts */}
-            {loading ? (
+            {loading && posts.length === 0 ? (
               <LoadingSkeleton variant="feed" count={3} />
             ) : posts.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-100 py-16 text-center">
@@ -1100,6 +1138,13 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-4">
+                {postMenu && (
+                  <PostContextMenu
+                    post={postMenu}
+                    onClose={() => setPostMenu(null)}
+                    onDelete={handlePostDeleted}
+                  />
+                )}
                 {posts.map(post => (
                   <PostCard
                     key={post.id}
@@ -1109,6 +1154,10 @@ export default function DashboardPage() {
                     onTagSaved={handleTagSaved}
                     onViewed={handlePostViewed}
                     onReport={handleReportPost}
+                    onMenuClick={(event, item) => {
+                      event.stopPropagation();
+                      setPostMenu(item);
+                    }}
                   />
                 ))}
 

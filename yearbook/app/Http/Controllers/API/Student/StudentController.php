@@ -46,47 +46,14 @@ class StudentController extends Controller
     {
         $viewer    = $request->user();
         $viewerKey = $viewer ? $viewer->id : 'guest';
+        $epoch     = (int) Cache::get('profile.visibility.epoch', 0);
 
-        $key = 'students.api.v2.' . $viewerKey . '.' . md5(serialize($request->only(['section_id', 'course', 'q', 'page'])));
+        $key = 'students.api.v3.' . $epoch . '.' . $viewerKey . '.' . md5(serialize($request->only(['section_id', 'course', 'q', 'page'])));
 
         return Cache::remember($key, 300, function () use ($request, $viewer) {
             return User::with(['section', 'studentRecord'])
                 ->whereIn('role', ['student', 'alumni'])
-                ->when(! $viewer, fn($q) =>
-                    $q->where('profile_visibility', 'public')
-                )
-                ->when($viewer, fn($q) =>
-                    $q->where(function ($inner) use ($viewer) {
-                        $inner->where('profile_visibility', 'public')
-                              ->orWhere(function ($batchmates) use ($viewer) {
-                                  $batchmates->whereIn('profile_visibility', ['batchmates', 'alumni_only'])
-                                      ->where(function ($sameBatch) use ($viewer) {
-                                          $hasBatchScope = false;
-
-                                          if ($viewer->batch_id) {
-                                              $sameBatch->orWhere('batch_id', $viewer->batch_id);
-                                              $hasBatchScope = true;
-                                          }
-
-                                          $viewerYear = $viewer->graduation_year ?? $viewer->batch;
-                                          if ($viewerYear) {
-                                              $sameBatch
-                                                  ->orWhere('graduation_year', $viewerYear)
-                                                  ->orWhere('batch', (string) $viewerYear)
-                                                  ->orWhereHas('studentRecord', fn($student) =>
-                                                      $student->where('graduation_year', $viewerYear)
-                                                  );
-                                              $hasBatchScope = true;
-                                          }
-
-                                          if (! $hasBatchScope) {
-                                              $sameBatch->whereRaw('1 = 0');
-                                          }
-                                      });
-                              })
-                              ->orWhere('id', $viewer->id);
-                    })
-                )
+                ->visibleTo($viewer)
                 ->when($viewer, fn($q) =>
                     $q->whereKeyNot($viewer->id)
                 )
@@ -113,6 +80,8 @@ class StudentController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
+        // Directory profiles are users.id. Do not treat a matching students.id as this person:
+        // those primary keys collide (for example user 33 and student 33 are different people).
         $student = User::with(['section', 'studentRecord'])->find($id);
         if (! $student) {
             $studentRecord = Student::with('userAccount')->find($id);
@@ -143,6 +112,9 @@ class StudentController extends Controller
                         'profile_picture' => $studentRecord->photo,
                         'course' => $studentRecord->course,
                         'graduation_year' => $studentRecord->graduation_year,
+                        'academic_status' => ($studentRecord->graduation_year && (int) $studentRecord->graduation_year <= (int) now()->year)
+                            ? 'Alumni'
+                            : 'Current Student',
                     ],
                 ], 200);
             }
@@ -150,6 +122,10 @@ class StudentController extends Controller
 
         $isSubscribed = $request->attributes->get('viewer_is_subscribed', false);
         $isOwner      = $request->user()?->id === $student->id;
+
+        if (! $student->canBeViewedBy($request->user())) {
+            return response()->json($student->visibilityDenialPayload(), 403);
+        }
 
         if ($isOwner) {
             return response()->json(array_merge(
@@ -173,6 +149,9 @@ class StudentController extends Controller
                     'student_id'      => $student->student_id,
                     'graduation_year' => $student->graduation_year,
                     'batch'           => $student->batch,
+                    'role'            => $student->role,
+                    'is_alumni'       => $student->isAlumni(),
+                    'academic_status' => $student->academicStatusLabel(),
                     'section'         => $student->section ? [
                         'name'       => $student->section->name,
                         'batch_year' => $student->section->batch_year,
@@ -279,12 +258,18 @@ class StudentController extends Controller
     {
         $isSubscribed = $request->attributes->get('viewer_is_subscribed', false);
         $isOwner      = $request->user()?->id === $id;
+        $user = User::with('studentRecord')->findOrFail($id);
+
+        if (! $user->canBeViewedBy($request->user())) {
+            return response()->json(array_merge($user->visibilityDenialPayload(), [
+                'success' => false,
+                'data' => [],
+            ]), 403);
+        }
 
         if (! $isOwner && ! $isSubscribed) {
             return response()->json(['success' => false, 'restricted' => true, 'data' => []], 200);
         }
-
-        $user = User::findOrFail($id);
 
         $achievements = $user->achievements()
             ->orderByDesc('date_awarded')
@@ -310,35 +295,48 @@ class StudentController extends Controller
     {
         $isSubscribed = $request->attributes->get('viewer_is_subscribed', false);
         $isOwner      = $request->user()?->id === $id;
+        $viewer = $request->user();
+        $user = User::with('studentRecord')->findOrFail($id);
+
+        if (! $user->canBeViewedBy($viewer)) {
+            return response()->json(array_merge($user->visibilityDenialPayload(), [
+                'success' => false,
+                'data' => [],
+            ]), 403);
+        }
 
         if (! $isOwner && ! $isSubscribed) {
             return response()->json(['success' => false, 'restricted' => true, 'data' => []], 200);
         }
 
-        $user = User::findOrFail($id);
-
         $photos = $user->taggedPhotos()
             ->with([
-                'uploader:id,name',
-                'photo.media:id,photo_id,file_path,resource_type,sort_order',
-                'graduationPhoto:id,file_path,resource_type',
+                'user:id,name,graduation_year,batch,section_id,course',
+                'media:id,photo_id,file_path,resource_type,sort_order',
+                'taggedUsers:id,name',
             ])
-            ->orderByDesc('created_at')
+            ->latest('photos.created_at')
             ->get()
-            ->map(fn($p) => [
-                'id'          => $p->id,
-                'photo_id'    => $p->photo_id,
-                'photo_path'  => $this->taggedPhotoPath($p),
-                'photo_url'   => $this->taggedPhotoUrl($p),
-                'file_path'   => $this->taggedPhotoPath($p),
-                'image_url'   => $this->taggedPhotoUrl($p),
-                'caption'     => $p->caption,
-                'status'      => $p->status,
-                'uploaded_by' => $p->uploader
-                    ? ['id' => $p->uploader->id, 'name' => $p->uploader->name]
+            ->filter(fn (Photo $photo) => $photo->visibleTo($viewer))
+            ->map(fn (Photo $photo) => [
+                'id'          => $photo->id,
+                'photo_id'    => $photo->id,
+                'photo_path'  => $photo->file_path,
+                'photo_url'   => $photo->file_path,
+                'file_path'   => $photo->file_path,
+                'image_url'   => $photo->file_path,
+                'caption'     => $photo->caption,
+                'status'      => 'approved',
+                'tagged_users' => $photo->taggedUsers->map(fn ($tagged) => [
+                    'id'   => $tagged->id,
+                    'name' => $tagged->name,
+                ])->values(),
+                'uploaded_by' => $photo->user
+                    ? ['id' => $photo->user->id, 'name' => $photo->user->name]
                     : null,
-                'created_at'  => $p->created_at->diffForHumans(),
-            ]);
+                'created_at'  => $photo->created_at?->diffForHumans(),
+            ])
+            ->values();
 
         return response()->json([
             'success' => true,

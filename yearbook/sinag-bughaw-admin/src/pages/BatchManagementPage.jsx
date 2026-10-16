@@ -23,6 +23,13 @@ const C = {
   shadowLg: "0 8px 40px rgba(30,58,138,.16)",
 };
 
+const MIN_BATCH_YEAR = 2022;
+const MAX_BATCH_YEAR = new Date().getFullYear();
+const BATCH_YEARS = Array.from(
+  { length: MAX_BATCH_YEAR - MIN_BATCH_YEAR + 1 },
+  (_, i) => MAX_BATCH_YEAR - i
+).filter((year) => year >= MIN_BATCH_YEAR && year <= MAX_BATCH_YEAR);
+
 // School Course Map (single source of truth)
 const SCHOOL_MAP = {
   SACE: {
@@ -158,16 +165,19 @@ function PillButton({ label, color, bg, onClick }) {
 }
 
 function Avatar({ name = "?", photo, size = 36 }) {
-  if (photo) return (
-    <img src={photo} alt={name}
+  const safeName = String(name ?? "").trim() || "?";
+  const photoUrl = typeof photo === "string" && photo.trim() ? photo : null;
+  if (photoUrl) return (
+    <img src={photoUrl} alt={safeName}
       style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
   );
-  const initials = name.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase();
+  const initials = safeName.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase() || "?";
   const palettes = [
     [C.blueBg, C.blue], [C.greenBg, C.green], [C.amberBg, C.amber],
     [C.purpleBg, C.purple], [C.tealBg, C.teal], [C.redBg, C.red],
   ];
-  const [bg, fg] = palettes[name.charCodeAt(0) % palettes.length];
+  const paletteIndex = safeName.charCodeAt(0) % palettes.length;
+  const [bg, fg] = palettes[Number.isFinite(paletteIndex) ? paletteIndex : 0];
   return (
     <div style={{
       width: size, height: size, borderRadius: "50%", background: bg, color: fg,
@@ -355,7 +365,7 @@ const STEPS = [
   { key: "students", icon: "students", label: "Students" },
 ];
 
-function StepBar({ current, onSelect }) {
+function StepBar({ current, onSelect, counts = {} }) {
   const idx = STEPS.findIndex(s => s.key === current);
   return (
     <div className="mb-6 flex w-fit items-center rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
@@ -376,6 +386,11 @@ function StepBar({ current, onSelect }) {
           >
             <Icon name={s.icon} className="h-4 w-4" />
             <span>{s.label}</span>
+            {counts[s.key] != null && (
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}>
+                {Number(counts[s.key]).toLocaleString()}
+              </span>
+            )}
             {done && <Icon name="check" className="h-3.5 w-3.5 opacity-70" />}
           </button>
         );
@@ -414,16 +429,32 @@ function BatchModal({ batch, onClose, onSaved, toast }) {
   const save = async () => {
     const e = {};
     if (!form.name.trim())     e.name = "Batch name is required.";
-    if (!form.graduation_year) e.graduation_year = "Year is required.";
+    if (!BATCH_YEARS.includes(Number(form.graduation_year))) {
+      e.graduation_year = `Year must be from ${MIN_BATCH_YEAR} through ${MAX_BATCH_YEAR}.`;
+    }
     if (Object.keys(e).length) { setErrors(e); return; }
     setSaving(true);
+    setErrors({});
     try {
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        graduation_year: Number(form.graduation_year),
+      };
       isEdit
-        ? await api.put(`/admin/batches/${batch.id}`, form)
-        : await api.post("/admin/batches", form);
+        ? await api.put(`/admin/batches/${batch.id}`, payload)
+        : await api.post("/admin/batches", payload);
       toast(isEdit ? "Batch updated." : "Batch created.");
       onSaved();
-    } catch (err) { toast(err.response?.data?.message ?? "Failed to save.", "error"); }
+    } catch (err) {
+      const fieldErrors = err.response?.data?.errors ?? {};
+      const next = {};
+      if (fieldErrors.name?.[0]) next.name = fieldErrors.name[0];
+      if (fieldErrors.graduation_year?.[0]) next.graduation_year = fieldErrors.graduation_year[0];
+      if (Object.keys(next).length) setErrors(next);
+      const message = next.graduation_year || next.name || err.response?.data?.message || "Failed to save.";
+      toast(message, "error");
+    }
     finally { setSaving(false); }
   };
 
@@ -438,10 +469,14 @@ function BatchModal({ batch, onClose, onSaved, toast }) {
               style={{ ...inputBase, borderColor: errors.name ? C.red : C.border }} />
           </Field>
           <Field label="Graduation Year" required error={errors.graduation_year}>
-            <input type="number" value={form.graduation_year}
-              onChange={e => set("graduation_year", parseInt(e.target.value))}
-              min={2000} max={2100}
-              style={{ ...inputBase, borderColor: errors.graduation_year ? C.red : C.border }} />
+            <select value={form.graduation_year}
+              onChange={e => set("graduation_year", parseInt(e.target.value, 10))}
+              style={{ ...inputBase, borderColor: errors.graduation_year ? C.red : C.border }}>
+              {BATCH_YEARS.map(year => (
+                <option key={year} value={year}>Batch {year}</option>
+              ))}
+            </select>
+            <p className="m-0 mt-1.5 text-xs text-slate-400">Allowed years: {MIN_BATCH_YEAR} through {MAX_BATCH_YEAR}.</p>
           </Field>
           <Field label="Description">
             <textarea value={form.description} onChange={e => set("description", e.target.value)}
@@ -460,6 +495,8 @@ function BatchModal({ batch, onClose, onSaved, toast }) {
 // Section Modal (smart: dept filters courses)
 function SectionModal({ section, batchId, onClose, onSaved, toast }) {
   const isEdit = !!section?.id;
+  const [chosenBatch, setChosenBatch] = useState(batchId ?? "");
+  const [batchOptions, setBatchOptions] = useState([]);
   const [form, setForm] = useState({
     department:  section?.department  ?? "",
     course:      section?.course      ?? "",
@@ -472,6 +509,16 @@ function SectionModal({ section, batchId, onClose, onSaved, toast }) {
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
+  useEffect(() => {
+    if (batchId) return;
+    api.get("/admin/batches")
+      .then(res => {
+        const rows = res.data.data ?? res.data;
+        setBatchOptions(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => setBatchOptions([]));
+  }, [batchId]);
+
   // When department changes, reset course
   const setDept = (v) => setForm(p => ({ ...p, department: v, course: "" }));
 
@@ -479,13 +526,14 @@ function SectionModal({ section, batchId, onClose, onSaved, toast }) {
 
   const save = async () => {
     const e = {};
+    if (!batchId && !chosenBatch) e.batch = "Please select a batch.";
     if (!form.department.trim()) e.department = "Please select a school.";
     if (!form.course.trim())     e.course     = "Please select a course.";
     if (!form.name.trim())       e.name       = "Section name is required.";
     if (Object.keys(e).length)  { setErrors(e); return; }
     setSaving(true);
     try {
-      const payload = { ...form, batch_id: batchId };
+      const payload = { ...form, batch_id: batchId || chosenBatch };
       isEdit
         ? await api.put(`/admin/sections/${section.id}`, payload)
         : await api.post("/admin/sections", payload);
@@ -500,6 +548,18 @@ function SectionModal({ section, batchId, onClose, onSaved, toast }) {
       <ModalCard width={540}>
         <ModalHeader title={isEdit ? "Edit Section" : "Add New Section"} onClose={onClose} />
         <ModalBody>
+
+          {!batchId && (
+            <Field label="Batch" required error={errors.batch}>
+              <select value={chosenBatch} onChange={e => setChosenBatch(e.target.value)}
+                style={{ ...inputBase, cursor: "pointer", borderColor: errors.batch ? C.red : C.border }}>
+                <option value="">Select batch…</option>
+                {batchOptions.map(b => (
+                  <option key={b.id} value={b.id}>{b.name} · {b.graduation_year}</option>
+                ))}
+              </select>
+            </Field>
+          )}
 
           {/* Step 1 School */}
           <Field label="School / Department" required error={errors.department}>
@@ -532,9 +592,13 @@ function SectionModal({ section, batchId, onClose, onSaved, toast }) {
                 style={{ ...inputBase, borderColor: errors.name ? C.red : C.border }} />
             </Field>
             <Field label="School Year">
-              <input type="number" value={form.batch_year}
-                onChange={e => set("batch_year", parseInt(e.target.value))}
-                min={2000} max={2100} style={inputBase} />
+              <select value={form.batch_year}
+                onChange={e => set("batch_year", parseInt(e.target.value, 10))}
+                style={inputBase}>
+                {BATCH_YEARS.map(year => (
+                  <option key={year} value={year}>Batch {year}</option>
+                ))}
+              </select>
             </Field>
           </div>
 
@@ -560,27 +624,6 @@ function SectionModal({ section, batchId, onClose, onSaved, toast }) {
     </Overlay>
   );
 }
-
-// Sample Student Data
-const SAMPLE_STUDENT = {
-  first_name: "Juan", last_name: "Dela Cruz", middle_name: "Santos", nickname: "JD",
-  student_no: "2025-00011", email: "juan@student.nu-lipa.edu.ph",
-  birthday: "2003-06-15", hometown: "Lipa City, Batangas", honors: "Cum Laude",
-  organizations: "SSC President, JPIA Member, Debate Team",
-  achievements: "Best Thesis Award 2025, Dean's Lister 6 consecutive semesters",
-  motto: "Work hard in silence, let success make the noise.",
-  student_quote: "The future belongs to those who believe in the beauty of their dreams.",
-  fondest_memory: "Our late night coding sessions before every finals week.",
-  ambition: "Software Engineer at a top tech company",
-  most_likely_to: "Start his own tech startup",
-  future_plans: "Pursue masters degree abroad then build a startup in the Philippines.",
-  message_to_batchmates: "Thank you for making every sleepless night worth it. See you at the top!",
-  message_to_parents: "To my parents, everything I am is because of you. This is for you.",
-  facebook_url: "https://facebook.com/juandelacruz",
-  instagram_url: "https://instagram.com/juandelacruz",
-  linkedin_url: "https://linkedin.com/in/juandelacruz",
-  github_url: "https://github.com/juandelacruz",
-};
 
 // Student Modal
 function StudentModal({ student, sectionId, onClose, onSaved, toast }) {
@@ -664,13 +707,6 @@ function StudentModal({ student, sectionId, onClose, onSaved, toast }) {
         <ModalHeader
           title={isEdit ? "Edit Student" : "Add Student"}
           onClose={onClose}
-          extra={!isEdit && (
-            <button onClick={() => setForm(SAMPLE_STUDENT)} style={{
-              padding: "5px 12px", borderRadius: 8, fontSize: "0.75rem", fontWeight: 700,
-              cursor: "pointer", fontFamily: "inherit", background: C.blueBg,
-              color: C.blue, border: `1px solid ${C.blue}33`,
-            }}>Fill Sample</button>
-          )}
         />
         <ModalBody>
           <Divider label="Profile Photo" />
@@ -821,8 +857,9 @@ function StudentModal({ student, sectionId, onClose, onSaved, toast }) {
 
 // VIEW: BATCHES
 
-function BatchesView({ toast, onSelect, onViewStudents }) {
-  const [batches,    setBatches]    = useState([]);
+function BatchesView({ toast, onSelect, onViewStudents, onChanged }) {
+  const [groups,     setGroups]     = useState({});
+  const [stats,      setStats]      = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
   const [modal,      setModal]      = useState(null);
@@ -830,22 +867,34 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
   const [delLoading, setDelLoading] = useState(false);
   const timer = useRef(null);
 
-  const load = useCallback(async (q = search) => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get("/admin/batches", { params: { search: q, per_page: 50 } });
-      setBatches(res.data.data ?? res.data);
+      const res = await api.get("/admin/academics/directory");
+      const rows = res.data.data ?? {};
+      setGroups(rows && !Array.isArray(rows) ? rows : {});
+      setStats(res.data.stats ?? null);
     } catch { toast("Failed to load batches.", "error"); }
     finally  { setLoading(false); }
-  }, [search]);
+  }, [toast]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   const handleSearch = v => {
     setSearch(v);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => load(v), 400);
   };
+
+  const departmentOrder = stats?.departments?.map(item => item.department) ?? Object.keys(groups);
+  const needle = search.trim().toLowerCase();
+  const visibleGroups = departmentOrder.map(dept => {
+    const rows = (groups[dept] ?? []).filter(batch => {
+      if (!needle) return true;
+      return [batch.name, batch.department, batch.graduation_year, batch.course]
+        .some(value => String(value ?? "").toLowerCase().includes(needle));
+    });
+    return [dept, rows];
+  }).filter(([, rows]) => rows.length > 0);
 
   const doDelete = async () => {
     setDelLoading(true);
@@ -864,6 +913,18 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
         <Btn onClick={() => setModal({})}>+ New Batch</Btn>
       </div>
 
+      {stats?.departments?.length > 0 && !search.trim() && (
+        <div className="mb-6 grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
+          {stats.departments.map(dept => (
+            <div key={dept.department} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{dept.department}</div>
+              <div className="mt-1 text-2xl font-black text-slate-800">{Number(dept.students_count ?? 0).toLocaleString()}</div>
+              <div className="text-xs font-semibold text-slate-400">registered students</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <CardGrid>{Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -872,7 +933,7 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
             <Skeleton w="40%" h={11} />
           </div>
         ))}</CardGrid>
-      ) : batches.length === 0 ? (
+      ) : visibleGroups.every(([, rows]) => rows.length === 0) ? (
         <div className="px-5 py-16 text-center text-slate-500">
           <div className="mb-3 text-5xl font-black text-indigo-200">BAT</div>
           <div className="mb-1.5 text-lg font-extrabold text-slate-800">No batches yet</div>
@@ -880,9 +941,18 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
           <Btn onClick={() => setModal({})}>+ Create First Batch</Btn>
         </div>
       ) : (
-        <CardGrid>
-          {batches.map(b => (
-            <Card key={b.id} accent={C.blue} onClick={() => onSelect(b)}
+        visibleGroups.map(([dept, rows]) => rows.length > 0 && (
+          <div key={dept} className="mb-8">
+            <div className="mb-3 flex items-center gap-3">
+              <div className="h-px flex-1 bg-slate-200" />
+              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                {dept} · {Number(stats?.departments?.find(item => item.department === dept)?.students_count ?? rows.reduce((sum, batch) => sum + Number(batch.students_count ?? 0), 0)).toLocaleString()} registered
+              </span>
+              <div className="h-px flex-1 bg-slate-200" />
+            </div>
+            <CardGrid>
+          {rows.map(b => (
+            <Card key={`${dept}-${b.id}`} accent={colorOf(dept)} onClick={() => onSelect(b)}
               actions={<>
                 <SmallBtn onClick={e => { e.stopPropagation(); setModal(b); }}>
                   <Icon name="edit" className="h-3.5 w-3.5" /> Edit
@@ -900,7 +970,7 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
               </div>
               <div className="mb-2.5 flex flex-wrap gap-1.5">
                 <PillButton
-                  label={`${b.sections_count ?? 0} sections`}
+                  label={`${b.sections?.length ?? b.sections_count ?? 0} sections`}
                   color={C.purple}
                   bg={C.purpleBg}
                   onClick={e => { e.stopPropagation(); onSelect(b); }}
@@ -921,14 +991,16 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
               </button>
             </Card>
           ))}
-        </CardGrid>
+            </CardGrid>
+          </div>
+        ))
       )}
 
       {modal !== null && (
         <BatchModal
           batch={Object.keys(modal).length ? modal : null}
           onClose={() => setModal(null)}
-          onSaved={() => { setModal(null); load(); }}
+          onSaved={() => { setModal(null); load(); onChanged?.(); }}
           toast={toast}
         />
       )}
@@ -944,23 +1016,43 @@ function BatchesView({ toast, onSelect, onViewStudents }) {
 
 // VIEW: SECTIONS (flat list, grouped by school, filterable)
 
-function SectionsView({ batch, toast, onSelect }) {
+function SectionsView({ batch = null, toast, onSelect, onCount }) {
   const [sections,   setSections]   = useState([]);
+  const [stats,      setStats]      = useState(null);
   const [loading,    setLoading]    = useState(true);
   const [modal,      setModal]      = useState(null);
   const [delTarget,  setDelTarget]  = useState(null);
   const [delLoading, setDelLoading] = useState(false);
-  const [filterDept, setFilterDept] = useState(""); // "" = all
+  const [filterDept, setFilterDept] = useState(batch?.department ?? "");
   const [search,     setSearch]     = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get("/admin/sections", { params: { batch_id: batch.id, per_page: 300 } });
-      setSections(res.data.data ?? res.data);
+      const res = await api.get("/admin/academics/directory");
+      const groups = res.data.data ?? {};
+      setStats(res.data.stats ?? null);
+      const rows = Object.entries(groups).flatMap(([dept, batches]) =>
+        (Array.isArray(batches) ? batches : []).flatMap(item =>
+          (item.sections ?? []).map(section => ({
+            ...section,
+            department: section.department || dept,
+            batch_name: item.name,
+            graduation_year: item.graduation_year,
+            batch_students_count: item.students_count,
+            batch_record_id: item.id,
+          }))
+        )
+      ).filter(section => {
+        if (batch?.id && String(section.batch_record_id) !== String(batch.id)) return false;
+        if (batch?.department && section.department !== batch.department) return false;
+        return true;
+      });
+      setSections(rows);
+      onCount?.(rows.length);
     } catch { toast("Failed to load sections.", "error"); }
     finally { setLoading(false); }
-  }, [batch.id]);
+  }, [batch?.id, batch?.department, toast, onCount]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1011,9 +1103,9 @@ function SectionsView({ batch, toast, onSelect }) {
       {/* Header */}
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-lg font-extrabold text-slate-800">{batch.name}</div>
+          <div className="text-lg font-extrabold text-slate-800">{batch?.name ?? "All Sections"}</div>
           <div className="mt-0.5 text-sm text-slate-500">
-            Class of {batch.graduation_year} · {sections.length} sections
+            {batch ? `Class of ${batch.graduation_year} · ` : ""}{sections.length} sections
           </div>
         </div>
         <Btn onClick={() => setModal({})}>+ Add Section</Btn>
@@ -1088,7 +1180,8 @@ function SectionsView({ batch, toast, onSelect }) {
                 <div className="text-sm font-semibold text-slate-500">
                   {school?.label ?? dept}
                 </div>
-                <div className="ml-auto">
+                <div className="ml-auto flex gap-2">
+                  {pill(`${Number(batch?.id ? grouped[dept][0]?.batch_students_count ?? 0 : stats?.departments?.find(item => item.department === dept)?.students_count ?? 0)} registered`, C.green, C.greenBg)}
                   {pill(`${grouped[dept].length} sections`, color, bg)}
                 </div>
               </div>
@@ -1101,6 +1194,7 @@ function SectionsView({ batch, toast, onSelect }) {
                         {course}
                       </div>
                       <div className="h-px min-w-[80px] flex-1 bg-slate-200" />
+                      {pill(`${[...new Map(courseGroups[course].map(section => [`${section.batch_record_id}-${section.course}`, Number(section.students_count ?? 0)])).values()].reduce((sum, count) => sum + count, 0)} students`, C.green, C.greenBg)}
                       {pill(`${courseGroups[course].length} sections`, color, bg)}
                     </div>
                     <CardGrid>
@@ -1116,7 +1210,7 @@ function SectionsView({ batch, toast, onSelect }) {
                     </>}>
                     <div className="mb-1.5 flex items-start justify-between">
                       <div className="text-base font-extrabold text-slate-800">{s.name}</div>
-                      {pill(`${s.students_count ?? 0} students`, C.green, C.greenBg)}
+                      {pill(`${s.batch_name ?? "Batch"} ${s.graduation_year ?? ""}`.trim(), C.blue, C.blueBg)}
                     </div>
                     <div className="mb-2 text-xs text-slate-500">
                       {s.course}
@@ -1138,7 +1232,7 @@ function SectionsView({ batch, toast, onSelect }) {
       {modal !== null && (
         <SectionModal
           section={Object.keys(modal).length ? modal : null}
-          batchId={batch.id}
+          batchId={batch?.id}
           onClose={() => setModal(null)}
           onSaved={() => { setModal(null); load(); }}
           toast={toast}
@@ -1156,7 +1250,27 @@ function SectionsView({ batch, toast, onSelect }) {
 
 // VIEW: STUDENTS
 
-function StudentsView({ batch, section, toast }) {
+function studentText(value, fallback = "—") {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
+function studentDisplayName(student) {
+  const first = studentText(student?.first_name, "");
+  const last = studentText(student?.last_name, "");
+  if (last && first) return `${last}, ${first}`;
+  if (last || first) return last || first;
+  return studentText(student?.name, "Student");
+}
+
+function studentAvatarName(student) {
+  const first = studentText(student?.first_name, "");
+  const last = studentText(student?.last_name, "");
+  return [first, last].filter(Boolean).join(" ") || studentText(student?.name, "Student");
+}
+
+function StudentsView({ batch = null, section = null, toast }) {
   const [students,   setStudents]   = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
@@ -1171,31 +1285,23 @@ function StudentsView({ batch, section, toast }) {
   const load = useCallback(async (q = search) => {
     setLoading(true);
     try {
-      if (isBatchWide) {
-        const res = await api.get(`/admin/batches/${batch.id}`);
-        const rawBatch = res.data.data ?? res.data.batch ?? res.data;
-        const allStudents = (rawBatch.sections ?? []).flatMap(sec =>
-          (sec.students ?? []).map(student => ({ ...student, _section: sec }))
-        );
-        const term = q.trim().toLowerCase();
-        setStudents(term
-          ? allStudents.filter(s =>
-              `${s.first_name ?? ""} ${s.last_name ?? ""} ${s.middle_name ?? ""} ${s.student_no ?? ""} ${s.email ?? ""} ${s._section?.name ?? ""}`
-                .toLowerCase()
-                .includes(term)
-            )
-          : allStudents
-        );
-      } else {
-        const res = await api.get(`/admin/sections/${section.id}/students`, { params: { search: q, per_page: 200 } });
-        const raw = res.data;
-        setStudents(Array.isArray(raw) ? raw : Array.isArray(raw.data) ? raw.data : []);
-      }
+      const params = {};
+      if (q) params.search = q;
+      if (section?.id) params.section_id = section.id;
+      else if (batch?.graduation_year) params.graduation_year = batch.graduation_year;
+      if (!section?.id && batch?.department) params.department = batch.department;
+      const res = await api.get("/admin/academics/students", { params });
+      const payload = res.data?.data ?? [];
+      const rows = Array.isArray(payload) ? payload : [];
+      setStudents(rows.filter(student => student && typeof student === "object").map(student => ({
+        ...student,
+        _section: student.section_name ? { name: studentText(student.section_name, "") } : null,
+      })));
     } catch { toast("Failed to load students.", "error"); setStudents([]); }
     finally { setLoading(false); }
-  }, [batch.id, isBatchWide, section?.id, search]);
+  }, [batch?.graduation_year, batch?.department, section?.id, search, toast]);
 
-  useEffect(() => { load(); }, [batch.id, section?.id]);
+  useEffect(() => { load(); }, [batch?.id, batch?.graduation_year, batch?.department, section?.id]);
 
   const handleSearch = v => {
     setSearch(v);
@@ -1234,7 +1340,8 @@ function StudentsView({ batch, section, toast }) {
     finally { setImporting(false); e.target.value = ""; }
   };
 
-  const withHonors = students.filter(s => s.honors).length;
+  const studentRows = Array.isArray(students) ? students : [];
+  const withHonors = studentRows.filter(s => s?.honors).length;
   const color = colorOf(section?.department);
   const bg    = bgOf(section?.department);
 
@@ -1243,15 +1350,17 @@ function StudentsView({ batch, section, toast }) {
       {/* Section info banner */}
       <div style={{ borderLeftColor: color }} className="mb-4.5 flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 border-l-4 bg-white px-4.5 py-3.5 shadow-sm">
         <div className="min-w-[200px] flex-1">
-          <div className="text-base font-extrabold text-slate-800">{section?.name ?? `${batch.name} Students`}</div>
+          <div className="text-base font-extrabold text-slate-800">{section?.name ?? (batch?.name ? `${batch.name} Students` : "Registered Students")}</div>
           <div className="mt-0.5 text-xs text-slate-500">
             {section
-              ? `${batch.name} · ${section.department} · ${section.course}`
-              : `Class of ${batch.graduation_year} · All sections`}
+              ? `${batch?.name ?? "Batch"} · ${section.department} · ${section.course}`
+              : batch
+                ? `Class of ${batch.graduation_year} · Registered accounts`
+                : "All registered student and alumni accounts"}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {pill(`${students.length} enrolled`, color, bg)}
+          {pill(`${studentRows.length} registered`, color, bg)}
           {withHonors > 0 && pill(`${withHonors} with honors`, C.amber, C.amberBg)}
         </div>
       </div>
@@ -1260,16 +1369,7 @@ function StudentsView({ batch, section, toast }) {
       <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
         <input value={search} onChange={e => handleSearch(e.target.value)}
           placeholder="Search students…" className="w-full max-w-[360px] min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200" />
-        {!isBatchWide && <input type="file" accept=".csv" ref={fileRef} onChange={handleCSV} style={{ display: "none" }} />}
-        {!isBatchWide && <Btn variant="ghost" onClick={() => fileRef.current?.click()} disabled={importing}>
-          {importing ? "Importing…" : "⬆ Import CSV"}
-        </Btn>}
-        {!isBatchWide && <Btn onClick={() => setModal({})}>+ Add Student</Btn>}
       </div>
-
-      {!isBatchWide && <div className="mb-3.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
-        CSV columns: <strong>first_name, last_name, middle_name, student_no, email, honors</strong> — first row is the header.
-      </div>}
 
       {/* Table */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1277,7 +1377,7 @@ function StudentsView({ batch, section, toast }) {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50">
-                {["#", "Student", ...(isBatchWide ? ["Section"] : []), "Student No.", "Email", "Honors", "Actions"].map(h => (
+                {["#", "Student", "Course", "Department", ...(isBatchWide ? ["Section"] : []), "Student No.", "Email"].map(h => (
                   <th key={h} className="whitespace-nowrap px-3.5 py-2.5 text-left text-xs font-bold uppercase tracking-[0.05em] text-slate-500">{h}</th>
                 ))}
               </tr>
@@ -1289,54 +1389,52 @@ function StudentsView({ batch, section, toast }) {
                       <td key={j} className="border-b border-slate-200 px-3.5 py-3"><Skeleton w={w} h={13} /></td>
                     ))}</tr>
                   ))
-                : students.length === 0 ? <tr><td colSpan={isBatchWide ? 7 : 6} className="px-5 py-12 text-center text-slate-500">
+                : studentRows.length === 0 ? <tr><td colSpan={isBatchWide ? 7 : 6} className="px-5 py-12 text-center text-slate-500">
                       <div className="mb-2 text-4xl font-black text-slate-300">STU</div>
-                      <div className="mb-1.5 font-bold text-slate-800">No students yet</div>
-                      <div className="text-sm">Add students manually or import a CSV file.</div>
+                      <div className="mb-1.5 font-bold text-slate-800">No registered students</div>
+                      <div className="text-sm">Counts include student and alumni accounts with a course or section assignment.</div>
                     </td></tr>
-                  : students.map((s, idx) => (
-                      <tr key={s.id}
+                  : studentRows.map((s, idx) => {
+                      const middle = studentText(s.middle_name, "");
+                      const nickname = studentText(s.nickname, "");
+                      return (
+                      <tr key={s.id ?? idx}
                         onMouseEnter={e => e.currentTarget.style.background = "#f6f8ff"}
                         onMouseLeave={e => e.currentTarget.style.background = ""}>
                         <td className="border-b border-slate-200 px-3.5 py-3 text-xs text-slate-400">{idx + 1}</td>
                         <td className="border-b border-slate-200 px-3.5 py-3">
                           <div className="flex items-center gap-2.5">
-                            <Avatar name={`${s.first_name} ${s.last_name}`} photo={s.photo_url} size={36} />
+                            <Avatar name={studentAvatarName(s)} photo={s.photo_url ?? s.profile_picture} size={36} />
                             <div>
                               <div className="font-bold text-slate-800">
-                                {s.last_name}, {s.first_name}
-                                {s.middle_name ? ` ${s.middle_name.charAt(0)}.` : ""}
+                                {studentDisplayName(s)}
+                                {middle ? ` ${middle.charAt(0)}.` : ""}
+                                <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                                  (s.academic_status ?? (Number(s.graduation_year) > 0 && Number(s.graduation_year) <= new Date().getFullYear() ? "Alumni" : "Current Student")) === "Alumni"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-indigo-50 text-indigo-700"
+                                }`}>
+                                  {s.academic_status ?? (Number(s.graduation_year) > 0 && Number(s.graduation_year) <= new Date().getFullYear() ? "Alumni" : "Current Student")}
+                                </span>
                               </div>
                               <div className="text-xs text-slate-500">
-                                {s.nickname ? `"${s.nickname}" · ` : ""}{s.student_no}
+                                {nickname ? `"${nickname}" · ` : ""}{studentText(s.student_no, "")}
                               </div>
                             </div>
                           </div>
                         </td>
+                        <td className="border-b border-slate-200 px-3.5 py-3 text-sm text-slate-500">{studentText(s.course)}</td>
+                        <td className="border-b border-slate-200 px-3.5 py-3 text-sm font-bold text-slate-700">{studentText(s.department)}</td>
                         {isBatchWide && (
                           <td className="border-b border-slate-200 px-3.5 py-3 text-sm text-slate-500">
-                            {s._section?.name ?? "—"}
+                            {studentText(s._section?.name ?? s.section_name)}
                           </td>
                         )}
-                        <td className="border-b border-slate-200 px-3.5 py-3 font-mono text-sm text-slate-800">{s.student_no ?? "—"}</td>
-                        <td className="border-b border-slate-200 px-3.5 py-3 text-sm text-slate-500">{s.email ?? "—"}</td>
-                        <td className="border-b border-slate-200 px-3.5 py-3">
-                          {s.honors
-                            ? pill(s.honors, C.amber, C.amberBg)
-                            : <span className="text-sm text-slate-400">—</span>}
-                        </td>
-                        <td className="whitespace-nowrap border-b border-slate-200 px-3.5 py-3">
-                          <div className="flex gap-1.5">
-                            <SmallBtn onClick={() => setModal(s)}>
-                              <Icon name="edit" className="h-3.5 w-3.5" /> Edit
-                            </SmallBtn>
-                            <SmallBtn danger onClick={() => setDelTarget(s)}>
-                              <Icon name="trash" className="h-3.5 w-3.5" /> Remove
-                            </SmallBtn>
-                          </div>
-                        </td>
+                        <td className="border-b border-slate-200 px-3.5 py-3 font-mono text-sm text-slate-800">{studentText(s.student_no)}</td>
+                        <td className="border-b border-slate-200 px-3.5 py-3 text-sm text-slate-500">{studentText(s.email)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
             </tbody>
           </table>
         </div>
@@ -1353,7 +1451,7 @@ function StudentsView({ batch, section, toast }) {
       )}
       <ConfirmModal
         open={!!delTarget} title="Remove Student"
-        message={`Remove "${delTarget?.first_name} ${delTarget?.last_name}" from ${section?.name ?? delTarget?._section?.name ?? batch.name}?`}
+        message={`Remove "${delTarget?.first_name ?? ""} ${delTarget?.last_name ?? ""}" from ${section?.name ?? delTarget?._section?.name ?? batch?.name ?? "this list"}?`}
         onConfirm={doDelete} onCancel={() => setDelTarget(null)} loading={delLoading}
       />
     </>
@@ -1372,6 +1470,8 @@ export default function BatchSectionStudentsPage() {
   const [batch,   setBatch]   = useState(null);
   const [section, setSection] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [totals, setTotals] = useState(null);
+  const [sectionTotal, setSectionTotal] = useState(null);
   const { toasts, push: toast } = useToast();
 
   const updateRoute = useCallback((nextView, nextBatch = null, nextSection = null, replace = false) => {
@@ -1384,10 +1484,35 @@ export default function BatchSectionStudentsPage() {
 
   const go = {
     batches:  ()  => { setView("batches");  setBatch(null); setSection(null); updateRoute("batches"); },
-    sections: (b) => { setBatch(b);         setView("sections"); setSection(null); updateRoute("sections", b); },
+    sections: (b = null) => { setBatch(b); setView("sections"); setSection(null); updateRoute("sections", b); },
     batchStudents: (b) => { setBatch(b);    setView("students"); setSection(null); updateRoute("students", b); },
-    students: (s) => { setSection(s);       setView("students"); updateRoute("students", batch, s); },
+    students: (s = null) => {
+      const nextBatch = batch ?? s?.batch ?? null;
+      setBatch(nextBatch);
+      setSection(s);
+      setView("students");
+      updateRoute("students", nextBatch, s);
+    },
+    allStudents: () => { setBatch(null); setSection(null); setView("students"); updateRoute("students"); },
   };
+
+  const refreshTotals = useCallback(() => {
+    api.get("/admin/academics/summary")
+      .then(res => setTotals(res.data.data ?? res.data))
+      .catch(() => setTotals(null));
+  }, []);
+
+  const handleSectionCount = useCallback((count) => {
+    setSectionTotal(count);
+    refreshTotals();
+  }, [refreshTotals]);
+
+  useEffect(() => { refreshTotals(); }, [view, refreshTotals]);
+
+  useEffect(() => {
+    const timer = window.setInterval(refreshTotals, 8000);
+    return () => window.clearInterval(timer);
+  }, [refreshTotals]);
 
   useEffect(() => {
     const tab = ["batches", "sections", "students"].includes(searchParams.get("tab"))
@@ -1395,56 +1520,44 @@ export default function BatchSectionStudentsPage() {
       : "batches";
     const batchId = searchParams.get("batch_id");
     const sectionId = searchParams.get("section_id");
+    let cancelled = false;
 
-    if (tab === "batches" || !batchId) {
-      setView("batches");
-      setBatch(null);
-      setSection(null);
-      return;
-    }
+    const openTab = async () => {
+      setView(tab);
 
-    const loadRouteSection = async () => {
-      if (!sectionId) {
+      if (!batchId) {
+        setBatch(null);
         setSection(null);
-        return;
-      }
-      try {
-        const res = await api.get(`/admin/sections/${sectionId}`);
-        setSection(res.data.data ?? res.data.section ?? res.data);
-      } catch {
-        setSection(null);
-      }
-    };
-
-    const loadRouteBatch = async () => {
-      if (batch && String(batch.id) === String(batchId)) {
-        setView(tab);
-        if (tab === "students") await loadRouteSection();
-        else setSection(null);
+        setRouteLoading(false);
         return;
       }
 
       setRouteLoading(true);
       try {
         const res = await api.get(`/admin/batches/${batchId}`);
-        const nextBatch = res.data.data ?? res.data.batch ?? res.data;
-        setBatch(nextBatch);
-        setView(tab);
-        if (tab === "students") await loadRouteSection();
-        else setSection(null);
+        if (cancelled) return;
+        setBatch(res.data.data ?? res.data.batch ?? res.data);
+        if (tab === "students" && sectionId) {
+          const sectionRes = await api.get(`/admin/sections/${sectionId}`);
+          if (!cancelled) setSection(sectionRes.data.data ?? sectionRes.data.section ?? sectionRes.data);
+        } else if (!cancelled) {
+          setSection(null);
+        }
       } catch {
+        if (cancelled) return;
         toast("Failed to open selected batch.", "error");
         setView("batches");
         setBatch(null);
         setSection(null);
         updateRoute("batches", null, null, true);
       } finally {
-        setRouteLoading(false);
+        if (!cancelled) setRouteLoading(false);
       }
     };
 
-    loadRouteBatch();
-  }, [searchParams, batch, toast, updateRoute]);
+    openTab();
+    return () => { cancelled = true; };
+  }, [searchParams, toast, updateRoute]);
 
   const crumbs = [
     { label: "Batches", onClick: view !== "batches" ? go.batches : null },
@@ -1454,8 +1567,8 @@ export default function BatchSectionStudentsPage() {
 
   const handleStepSelect = key => {
     if (key === "batches") go.batches();
-    if (key === "sections") batch ? go.sections(batch) : go.batches();
-    if (key === "students") batch ? go.batchStudents(batch) : go.batches();
+    if (key === "sections") go.sections(null);
+    if (key === "students") go.allStudents();
   };
 
   return (
@@ -1478,7 +1591,15 @@ export default function BatchSectionStudentsPage() {
           </p>
         </div>
 
-        <StepBar current={view} onSelect={handleStepSelect} />
+        <StepBar
+          current={view}
+          onSelect={handleStepSelect}
+          counts={{
+            batches: totals?.batches,
+            sections: totals?.sections ?? sectionTotal,
+            students: totals?.students,
+          }}
+        />
         {crumbs.length > 1 && <Breadcrumb crumbs={crumbs} />}
 
         <div key={view} className="animate-[fadeUp_.2s_ease]">
@@ -1487,9 +1608,16 @@ export default function BatchSectionStudentsPage() {
               Loading selected batch...
             </div>
           )}
-          {view === "batches"  && <BatchesView  toast={toast} onSelect={go.sections} onViewStudents={go.batchStudents} />}
-          {view === "sections" && batch         && <SectionsView batch={batch} toast={toast} onSelect={go.students} />}
-          {view === "students" && batch          && <StudentsView batch={batch} section={section} toast={toast} />}
+          {view === "batches"  && <BatchesView  toast={toast} onSelect={go.sections} onViewStudents={go.batchStudents} onChanged={refreshTotals} />}
+          {view === "sections" && (
+            <SectionsView
+              batch={batch}
+              toast={toast}
+              onSelect={go.students}
+              onCount={handleSectionCount}
+            />
+          )}
+          {view === "students" && <StudentsView batch={batch} section={section} toast={toast} />}
         </div>
       </div>
 

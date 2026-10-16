@@ -6,10 +6,12 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import { isAlumniAccount } from '@/utils/academicStatus';
+import { YEAR_OPTIONS } from '@/api/batch.api';
 
 const VISIBILITY_OPTS = [
   { v: 'public',      icon: 'fa-globe',          label: 'Public',      desc: 'Anyone can view your profile'         },
-  { v: 'batchmates',  icon: 'fa-users',          label: 'Batchmates',  desc: 'Only students in your batch can view' },
+  { v: 'batchmates',  icon: 'fa-users',          label: 'Batchmates',  desc: 'Only students from your graduation year can view' },
   { v: 'private',     icon: 'fa-lock',           label: 'Private',     desc: 'Only you can view your profile'       },
 ];
 
@@ -60,15 +62,10 @@ const parseAchievementType = (value) => {
   }
 };
 
-const isGraduateUser = (user) => {
-  if (!user) return false;
-  if (['alumni', 'graduate', 'graduated'].includes(String(user.role || '').toLowerCase())) return true;
-  const year = Number(user.graduation_year ?? user.student?.graduation_year);
-  return Number.isFinite(year) && year <= new Date().getFullYear();
-};
+const isGraduateUser = (user) => isAlumniAccount(user);
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, fetchUser } = useAuth();
   const canEditCareer = isGraduateUser(user);
   const navSections = useMemo(() => (
     canEditCareer
@@ -195,6 +192,7 @@ export default function SettingsPage() {
     setVisibilitySaving(true);
     try {
       await profileSettingsApi.updateVisibility(visibility);
+      try { await fetchUser(); } catch { /* saved visibility still applies on the next request */ }
       showToast('Your profile visibility was updated successfully.');
     } catch {
       showToast('Failed to save visibility.', 'error');
@@ -476,15 +474,16 @@ export default function SettingsPage() {
                   <label className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1.5">
                     <i className="fas fa-calendar text-[#fdb813] text-[9px]" /> Graduation Year
                   </label>
-                  <input
-                    type="number"
+                  <select
                     value={academicForm.graduation_year}
                     onChange={e => setAcademicForm(p => ({ ...p, graduation_year: e.target.value }))}
-                    placeholder="e.g. 2026"
-                    min="1990"
-                    max="2100"
                     className={inputCls(false)}
-                  />
+                  >
+                    <option value="">Select batch year</option>
+                    {YEAR_OPTIONS.map(year => (
+                      <option key={year} value={year}>Batch {year}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1.5">

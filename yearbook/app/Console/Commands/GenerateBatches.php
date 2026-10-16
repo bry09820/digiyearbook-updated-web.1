@@ -63,7 +63,7 @@ class GenerateBatches extends Command
         $this->line('  <fg=yellow>📊 Batch Summary:</>');
         $this->newLine();
 
-        $batches = Batch::withCount('students')->with('sections')->get();
+        $batches = Batch::campusYears()->withCount('students')->with('sections')->get();
 
         $this->table(
             ['Batch Name', 'Department', 'Grad. Year', 'Students', 'Sections'],
@@ -95,6 +95,7 @@ class GenerateBatches extends Command
     private function previewBatches(): void
     {
         $groups = \App\Models\User::whereNotNull('graduation_year')
+            ->whereBetween('graduation_year', [\App\Models\Batch::MIN_YEAR, \App\Models\Batch::maxYear()])
             ->whereNotNull('course')
             ->where('role', 'student')
             ->select('course', 'graduation_year')

@@ -170,6 +170,19 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
     trackPageView(location.pathname, 'Analytics · Alumni Yearbook');
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (tab !== 'my-stats' || !isAuthenticated) return undefined;
+
+    const refresh = () => {
+      myStats.refetch(true);
+      trend.refetch(true);
+    };
+
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [tab, isAuthenticated, myStats.refetch, trend.refetch]);
+
   function handleTabSwitch(tabId) {
     setTab(tabId);
     trackAnalyticsTabSwitch(tabId);
@@ -215,13 +228,10 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
       ? [
           {
             label: 'Total views this week',
-            value: trending.data?.reduce(
-              (sum, person) => sum + Number(person.views_this_week ?? 0),
-              0
-            ),
+            value: trending.loading ? '—' : trending.viewsThisWeek,
             icon: Eye,
           },
-          { label: 'Profiles trending', value: trending.data?.length ?? 0,        icon: Flame     },
+          { label: 'Ranked this week', value: trending.data?.length ?? 0,        icon: Flame     },
           { label: 'Top viewed count',  value: topTrending?.views_this_week ?? 0, icon: BarChart2 },
         ]
       : tab === 'top-viewed'
@@ -233,6 +243,7 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
       : [
           { label: 'Personal profile views', value: myStats.data?.profile_views ?? 0,   icon: Eye           },
           { label: 'Photos uploaded',        value: myStats.data?.photos_uploaded ?? 0, icon: ImageIcon     },
+          { label: 'Times tagged',           value: myStats.data?.times_tagged ?? 0,    icon: Users         },
           { label: 'Messages sent',          value: myStats.data?.messages_sent ?? 0,   icon: MessageSquare },
         ];
 
@@ -462,10 +473,10 @@ export default function AnalyticsPage({ isAuthenticated = true }) {
             ) : (
               <>
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3.5 mb-2">
-                  <StatCard label="Profile views"     value={myStats.data?.profile_views?.toLocaleString()}     icon={Eye}           colorClass="text-indigo-600"  bgClass="bg-indigo-600/10"  />
-                  <StatCard label="Photos uploaded"   value={myStats.data?.photos_uploaded?.toLocaleString()}   icon={ImageIcon}     colorClass="text-emerald-500" bgClass="bg-emerald-500/10" />
-                  <StatCard label="Times tagged"      value={myStats.data?.times_tagged?.toLocaleString()}      icon={Users}         colorClass="text-purple-500"  bgClass="bg-purple-500/10"  />
-                  <StatCard label="Messages sent"     value={myStats.data?.messages_sent?.toLocaleString()}     icon={MessageSquare} colorClass="text-orange-500"  bgClass="bg-orange-500/10"  />
+                  <StatCard label="Personal profile views" value={Number(myStats.data?.profile_views ?? 0).toLocaleString()} icon={Eye}           colorClass="text-indigo-600"  bgClass="bg-indigo-600/10"  />
+                  <StatCard label="Photos uploaded"        value={Number(myStats.data?.photos_uploaded ?? 0).toLocaleString()} icon={ImageIcon}     colorClass="text-emerald-500" bgClass="bg-emerald-500/10" />
+                  <StatCard label="Times tagged"           value={Number(myStats.data?.times_tagged ?? 0).toLocaleString()}    icon={Users}         colorClass="text-purple-500"  bgClass="bg-purple-500/10"  />
+                  <StatCard label="Messages sent"          value={Number(myStats.data?.messages_sent ?? 0).toLocaleString()}   icon={MessageSquare} colorClass="text-orange-500"  bgClass="bg-orange-500/10"  />
                   <StatCard label="Messages received" value={myStats.data?.messages_received?.toLocaleString()} icon={MessageSquare} colorClass="text-pink-500"    bgClass="bg-pink-500/10"    />
                 </div>
 

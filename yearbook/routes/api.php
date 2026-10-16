@@ -4,10 +4,9 @@ use App\Http\Controllers\API\Payment\PaymentController;
 use App\Http\Controllers\API\Auth\AuthController;
 use App\Http\Controllers\API\AI\FaceRecognitionController;
 use App\Http\Controllers\API\AI\TranscriptController;
-use App\Http\Controllers\API\AI\VoiceNoteController;
-use App\Http\Controllers\API\Admin\VoiceNoteAdminController;
 use App\Http\Controllers\API\Admin\AdminAuthController;
 use App\Http\Controllers\API\Admin\AdminController;
+use App\Http\Controllers\API\Admin\AdminNotificationController;
 use App\Http\Controllers\API\Admin\UserManagementController;
 use App\Http\Controllers\API\Admin\MediaModerationController;
 use App\Http\Controllers\API\Admin\BatchSectionController;
@@ -76,6 +75,7 @@ Route::post('/analytics/record-view/{userId}', [AnalyticsController::class, 'rec
 // Faculty (public no login required)
 Route::prefix('faculty')->group(function () {
     Route::get('/',              [FacultyController::class, 'index']);
+    Route::get('/census',        [FacultyController::class, 'census']);
     Route::get('/by-department', [FacultyController::class, 'byDepartment']);
     Route::get('/{id}',          [FacultyController::class, 'show']);
 });
@@ -116,6 +116,7 @@ Route::middleware(['auth:sanctum', 'active.account', 'verified', 'throttle:120,1
         Route::get('/achievements', [ProfileSettingsController::class, 'getAchievements']);
 
         Route::get('/storage-usage',      [ProfileController::class, 'storageUsage']);
+        Route::get('/classmates',         [ProfileController::class, 'searchClassmates']);
         Route::post('/upload',            [ProfileController::class, 'uploadMedia'])
             ->middleware('feature:allow_student_posts');
         Route::get('/posts/{photoId}',    [ProfileController::class, 'getPost']);
@@ -136,11 +137,9 @@ Route::middleware(['auth:sanctum', 'active.account', 'verified', 'throttle:120,1
         Route::post('/profile/tagged-photos/upload', [StudentController::class, 'addTaggedPhoto']);
         Route::delete('/profile/tagged-photos/{photoId}', [StudentController::class, 'removeTaggedPhoto']);
 
-        Route::middleware('subscription.access')
-            ->get('/{id}/posts', [ProfileController::class, 'getPosts']);
-
         Route::middleware(['visibility', 'subscription.access'])->group(function () {
             Route::get('/{id}',               [StudentController::class, 'show']);
+            Route::get('/{id}/posts',         [ProfileController::class, 'getPosts']);
             Route::get('/{id}/achievements',  [StudentController::class, 'achievements']);
             Route::get('/{id}/tagged-photos', [StudentController::class, 'taggedPhotos']);
         });
@@ -225,23 +224,6 @@ Route::middleware(['auth:sanctum', 'active.account', 'verified', 'throttle:120,1
     Route::prefix('presence')->group(function () {
         Route::post('/',     [PresenceController::class, 'update']);
         Route::post('/bulk', [PresenceController::class, 'bulk']);
-    });
-
-    // Voice Notes 
-    Route::prefix('voice-notes')->group(function () {
-        Route::get('/inbox',            [VoiceNoteController::class, 'inbox']);
-        Route::get('/outbox',           [VoiceNoteController::class, 'outbox']);
-        Route::get('/profile/{userId}', [VoiceNoteController::class, 'forProfile']);
-        Route::post('/',                [VoiceNoteController::class, 'store']);
-        Route::delete('/{id}',          [VoiceNoteController::class, 'destroy']);
-    });
-
-    // Admin: Voice Note Moderation
-    Route::middleware('can:admin')->prefix('admin/voice-notes')->group(function () {
-        Route::get('/',              [VoiceNoteAdminController::class, 'index']);
-        Route::get('/stats',         [VoiceNoteAdminController::class, 'stats']);
-        Route::post('/{id}/approve', [VoiceNoteAdminController::class, 'approve']);
-        Route::post('/{id}/reject',  [VoiceNoteAdminController::class, 'reject']);
     });
 
     // Graduation 
@@ -329,11 +311,6 @@ Route::middleware(['auth:sanctum', 'active.account', 'verified', 'throttle:120,1
         Route::post('/{id}/read',      [NotificationController::class, 'markRead']);
     });
 
-    // Announcements 
-    Route::get('/announcements/recipients/count', [AdminAnnouncementController::class, 'recipientCount']);
-    Route::post('/announcements', [AdminAnnouncementController::class, 'store']);
-    Route::put('/announcements/{announcement}', [AdminAnnouncementController::class, 'update']);
-    Route::delete('/announcements/{announcement}', [AdminAnnouncementController::class, 'destroy']);
 
     // Analytics
     Route::prefix('analytics')->group(function () {
@@ -422,6 +399,8 @@ Route::middleware(['auth:sanctum', 'active.account', 'admin.only'])
 
     // Dashboard
     Route::get('/dashboard', [AdminController::class, 'dashboard']);
+    Route::get('/notifications', [AdminNotificationController::class, 'index']);
+    Route::post('/notifications/read', [AdminNotificationController::class, 'markRead']);
 
     // Students
     Route::get('/students',         [StudentController::class, 'index']);
@@ -445,6 +424,12 @@ Route::middleware(['auth:sanctum', 'active.account', 'admin.only'])
     Route::get('/batches',         [BatchController::class,   'index']);
     Route::get('/batches/{batch}', [BatchController::class,   'show']);
     Route::get('/sections',        [SectionController::class, 'index']);
+
+    Route::get('/announcements/recipients/count', [AdminAnnouncementController::class, 'recipientCount']);
+    Route::get('/announcements', [AdminAnnouncementController::class, 'index']);
+    Route::post('/announcements', [AdminAnnouncementController::class, 'store']);
+    Route::put('/announcements/{announcement}', [AdminAnnouncementController::class, 'update']);
+    Route::delete('/announcements/{announcement}', [AdminAnnouncementController::class, 'destroy']);
 
     // Analytics 
     Route::get('/analytics/summary',  [AnalyticsController::class, 'summary']);
@@ -488,11 +473,10 @@ Route::middleware(['auth:sanctum', 'active.account', 'admin.only'])
         Route::post('{type}/{id}/revert',  [MediaModerationController::class, 'revertItem']);
     });
 
-    // Voice Notes Moderation 
-    Route::get('/voice-notes',               [VoiceNoteAdminController::class, 'index']);
-    Route::get('/voice-notes/stats',         [VoiceNoteAdminController::class, 'stats']);
-    Route::post('/voice-notes/{id}/approve', [VoiceNoteAdminController::class, 'approve']);
-    Route::post('/voice-notes/{id}/reject',  [VoiceNoteAdminController::class, 'reject']);
+    // Shared academic totals (batches, sections, registered students)
+    Route::get('/academics/directory', [BatchSectionController::class, 'directory']);
+    Route::get('/academics/summary', [BatchSectionController::class, 'summary']);
+    Route::get('/academics/students', [BatchSectionController::class, 'registeredStudents']);
 
     // Batches 
     Route::prefix('batches')->group(function () {
@@ -538,9 +522,6 @@ Route::middleware(['auth:sanctum', 'active.account', 'admin.only'])
 
         Route::get('/videos',         [MediaModerationController::class, 'mediaVideos']);
         Route::delete('/videos/{id}', [MediaModerationController::class, 'destroyVideo']);
-
-        Route::get('/voice-notes',           [MediaModerationController::class, 'mediaVoiceNotes']);
-        Route::delete('/voice-notes/{id}',   [MediaModerationController::class, 'destroyVoiceNote']);
 
         Route::get('/tagged-photos',         [MediaModerationController::class, 'mediaTaggedPhotos']);
         Route::delete('/tagged-photos/{id}', [MediaModerationController::class, 'destroyTaggedPhoto']);

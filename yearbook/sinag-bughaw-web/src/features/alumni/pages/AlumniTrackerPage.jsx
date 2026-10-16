@@ -53,174 +53,92 @@ function AlumniCard({ alumni }) {
   const { yearbookUrl, loading: linkLoading } = useYearbookDeepLink(alumni.id);
   const pic = imageUrl(alumni.profile_picture) || avatarUrl(alumni.name);
 
+  const badges = [
+    alumni.batch_year ? { key: 'batch', icon: 'fa-graduation-cap', label: `Batch ${alumni.batch_year}`, tone: 'gold' } : null,
+    alumni.academic_status ? { key: 'status', icon: 'fa-user-graduate', label: alumni.academic_status, tone: 'navy' } : null,
+    alumni.course ? { key: 'course', icon: 'fa-book', label: alumni.course, tone: 'slate' } : null,
+  ].filter(Boolean);
+
   return (
-    <div
-      style={{
-        background: '#fff', borderRadius: 24, overflow: 'hidden',
-        border: '1px solid #f1f5f9',
-        boxShadow: '0 4px 20px rgba(29,43,75,0.06)',
-        transition: 'all 0.3s cubic-bezier(0.175,0.885,0.32,1.275)',
-        display: 'flex', flexDirection: 'column',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-8px)'; e.currentTarget.style.boxShadow = '0 20px 45px rgba(29,43,75,0.13)'; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(29,43,75,0.06)'; }}
-    >
-      {/* Top accent bar */}
-      <div style={{ height: 6, background: `linear-gradient(90deg, ${NAVY}, ${GOLD})` }} />
+    <article className="alumni-card">
+      <div className="alumni-card-accent" />
 
-      <div style={{ padding: 24, flex: 1 }}>
-
-        {/* Avatar + Name */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <img
-              src={pic}
-              alt={alumni.name}
-              style={{ width: 60, height: 60, borderRadius: 18, objectFit: 'cover', border: `2px solid ${GOLD}` }}
-            />
+      <div className="alumni-card-body">
+        <div className="alumni-card-identity">
+          <div className="alumni-card-avatar">
+            <img src={pic} alt={alumni.name} />
             {alumni.is_verified && (
-              <div style={{
-                position: 'absolute', bottom: -4, right: -4,
-                width: 20, height: 20, borderRadius: '50%',
-                background: '#3f51b5', border: '2px solid #fff',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <i className="fas fa-check" style={{ color: '#fff', fontSize: 8 }} />
-              </div>
+              <span className="alumni-card-verified" aria-label="Verified">
+                <i className="fas fa-check" />
+              </span>
             )}
           </div>
-          <div style={{ minWidth: 0 }}>
-            <h4 style={{
-              margin: 0, fontSize: '0.95rem', fontWeight: 800, color: NAVY,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {alumni.name}
-            </h4>
-            <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
-              {alumni.section ?? '—'}
-            </p>
+          <div className="alumni-card-heading">
+            <h4 className="alumni-card-name">{alumni.name}</h4>
+            <p className="alumni-card-meta">{alumni.section || 'Section not listed'}</p>
           </div>
         </div>
 
-        {/* Batch badge */}
-        {alumni.batch_year && (
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            background: 'rgba(253,184,19,0.12)',
-            border: '1px solid rgba(253,184,19,0.3)',
-            borderRadius: 20, padding: '4px 11px', marginBottom: 14,
-          }}>
-            <i className="fas fa-graduation-cap" style={{ color: GOLD, fontSize: 10 }} />
-            <span style={{ fontSize: '0.65rem', fontWeight: 800, color: '#92590e' }}>
-              Batch {alumni.batch_year}
-            </span>
+        {badges.length > 0 && (
+          <div className="alumni-badges">
+            {badges.map((badge) => (
+              <span key={badge.key} className={`alumni-badge alumni-badge-${badge.tone}`}>
+                <i className={`fas ${badge.icon}`} />
+                <span>{badge.label}</span>
+              </span>
+            ))}
           </div>
         )}
 
-        {/* Career info */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="alumni-career">
           {alumni.career?.job_title && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: 8,
-                background: 'rgba(29,43,75,0.06)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              }}>
-                <i className="fas fa-briefcase" style={{ color: NAVY, fontSize: 11 }} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <p style={{ margin: 0, fontSize: '0.72rem', fontWeight: 700, color: NAVY, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {alumni.career.job_title}
-                </p>
+            <div className="alumni-career-row">
+              <span className="alumni-career-icon"><i className="fas fa-briefcase" /></span>
+              <div className="alumni-card-heading">
+                <p className="alumni-card-line alumni-card-line-strong">{alumni.career.job_title}</p>
                 {alumni.career.company && (
-                  <p style={{ margin: 0, fontSize: '0.65rem', color: '#64748b' }}>
-                    {alumni.career.company}
-                  </p>
+                  <p className="alumni-card-line">{alumni.career.company}</p>
                 )}
               </div>
             </div>
           )}
 
           {alumni.career?.location && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: 8,
-                background: 'rgba(29,43,75,0.06)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              }}>
-                <i className="fas fa-location-dot" style={{ color: NAVY, fontSize: 11 }} />
-              </div>
-              <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
-                {alumni.career.location}
-              </p>
+            <div className="alumni-career-row">
+              <span className="alumni-career-icon"><i className="fas fa-location-dot" /></span>
+              <p className="alumni-card-line">{alumni.career.location}</p>
             </div>
           )}
 
           {alumni.career?.field && (
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              background: 'rgba(63,81,181,0.08)',
-              borderRadius: 8, padding: '4px 10px', alignSelf: 'flex-start',
-            }}>
-              <i className="fas fa-tag" style={{ color: '#3f51b5', fontSize: 9 }} />
-              <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#3f51b5' }}>
-                {alumni.career.field}
-              </span>
-            </div>
+            <span className="alumni-badge alumni-badge-field">
+              <i className="fas fa-tag" />
+              <span>{alumni.career.field}</span>
+            </span>
           )}
         </div>
       </div>
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, padding: '14px 20px', borderTop: '1px solid #f8fafc' }}>
-
-        {/* View Profile */}
-        <Link
-          to={`/students/${alumni.student_id ?? alumni.id}`}
-          style={{
-            flex: 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            background: NAVY, color: '#fff',
-            borderRadius: 12, padding: '9px 0',
-            fontSize: '0.72rem', fontWeight: 700, textDecoration: 'none',
-            transition: 'background 0.2s',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = '#3f51b5'}
-          onMouseLeave={e => e.currentTarget.style.background = NAVY}
-        >
-          <i className="fas fa-user" style={{ color: GOLD, fontSize: 10 }} />
+      <div className="alumni-actions">
+        <Link to={`/students/${alumni.student_id ?? alumni.id}`} className="alumni-action alumni-action-primary">
+          <i className="fas fa-user" />
           View Profile
         </Link>
 
-        {/* Deep-link Yearbook */}
         {yearbookUrl ? (
-          <Link
-            to={yearbookUrl}
-            title="View this alumni's page in the yearbook"
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-              background: 'rgba(253,184,19,0.12)',
-              border: '1.5px solid rgba(253,184,19,0.3)',
-              borderRadius: 12, padding: '9px 14px',
-              fontSize: '0.72rem', fontWeight: 700,
-              color: '#92590e', textDecoration: 'none',
-              transition: 'all 0.2s', whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = GOLD; e.currentTarget.style.color = NAVY; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(253,184,19,0.12)'; e.currentTarget.style.color = '#92590e'; }}
-          >
-            <i className="fas fa-book-open" style={{ fontSize: 10 }} />
+          <Link to={yearbookUrl} title="View this alumni's page in the yearbook" className="alumni-action alumni-action-yearbook">
+            <i className="fas fa-book-open" />
             Yearbook
           </Link>
         ) : (
           !linkLoading && (
-            <div style={{ display: 'flex', alignItems: 'center', padding: '9px 14px', fontSize: '0.65rem', color: '#cbd5e1' }}>
-              <i className="fas fa-book" style={{ fontSize: 10 }} />
-            </div>
+            <span className="alumni-action alumni-action-muted" aria-hidden="true">
+              <i className="fas fa-book" />
+            </span>
           )
         )}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -266,7 +184,12 @@ function FilterBar({ filters, onFilter, batches = [], onFaceFile, faceSearching 
           style={{ height: 44, padding: '0 14px', border: '1.5px solid #e2e8f0', borderRadius: 12, fontSize: '0.82rem', color: NAVY, outline: 'none', fontFamily: 'inherit', background: '#fff', cursor: 'pointer' }}
         >
           <option value="">All Batches</option>
-          {batches.map(b => <option key={b.id} value={b.id}>Batch {b.year}</option>)}
+          {batches
+            .filter(b => {
+              const year = Number(b.year ?? b.graduation_year);
+              return year >= 2022 && year <= new Date().getFullYear();
+            })
+            .map(b => <option key={b.id} value={b.id}>Batch {b.year ?? b.graduation_year}</option>)}
         </select>
       )}
 
@@ -385,6 +308,215 @@ export default function AlumniTrackerPage() {
           to   { opacity: 1; transform: translateY(0); }
         }
         .alumni-card-anim { animation: fadeInUp 0.4s ease both; }
+        .alumni-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+          gap: 20px;
+          align-items: stretch;
+        }
+        .alumni-grid-item {
+          display: flex;
+          min-width: 0;
+          height: 100%;
+        }
+        .alumni-card {
+          display: flex;
+          flex-direction: column;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
+          background: #fff;
+          border-radius: 24px;
+          border: 1px solid #f1f5f9;
+          box-shadow: 0 4px 20px rgba(29,43,75,0.06);
+          overflow: hidden;
+          transition: box-shadow 0.2s ease, transform 0.2s ease;
+        }
+        .alumni-card:hover {
+          transform: translateY(-4px);
+          box-shadow: 0 16px 36px rgba(29,43,75,0.12);
+        }
+        .alumni-card-accent {
+          height: 6px;
+          flex: 0 0 auto;
+          background: linear-gradient(90deg, #1d2b4b, #fdb813);
+        }
+        .alumni-card-body {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          flex: 1 1 auto;
+          min-width: 0;
+          padding: 20px 20px 16px;
+        }
+        .alumni-card-identity,
+        .alumni-career-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          min-width: 0;
+        }
+        .alumni-card-avatar {
+          position: relative;
+          flex: 0 0 auto;
+        }
+        .alumni-card-avatar img {
+          display: block;
+          width: 60px;
+          height: 60px;
+          border-radius: 18px;
+          object-fit: cover;
+          border: 2px solid #fdb813;
+        }
+        .alumni-card-verified {
+          position: absolute;
+          right: -4px;
+          bottom: -4px;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: #3f51b5;
+          border: 2px solid #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 8px;
+        }
+        .alumni-card-heading { min-width: 0; flex: 1 1 auto; }
+        .alumni-card-name,
+        .alumni-card-meta,
+        .alumni-card-line,
+        .alumni-badge span {
+          margin: 0;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+        .alumni-card-name {
+          font-size: 0.95rem;
+          font-weight: 800;
+          line-height: 1.3;
+          color: #1d2b4b;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .alumni-card-meta {
+          margin-top: 4px;
+          font-size: 0.72rem;
+          font-weight: 600;
+          line-height: 1.35;
+          color: #64748b;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .alumni-badges {
+          display: flex;
+          flex-wrap: wrap;
+          align-content: flex-start;
+          gap: 8px;
+          min-width: 0;
+        }
+        .alumni-badge {
+          display: inline-flex;
+          align-items: flex-start;
+          gap: 5px;
+          max-width: 100%;
+          border-radius: 20px;
+          padding: 4px 11px;
+          line-height: 1.35;
+          box-sizing: border-box;
+        }
+        .alumni-badge i { flex: 0 0 auto; margin-top: 2px; font-size: 10px; }
+        .alumni-badge span { font-size: 0.65rem; font-weight: 800; }
+        .alumni-badge-gold { background: rgba(253,184,19,0.12); border: 1px solid rgba(253,184,19,0.3); color: #92590e; }
+        .alumni-badge-gold i { color: #fdb813; }
+        .alumni-badge-navy { background: rgba(29,43,75,0.06); color: #1d2b4b; }
+        .alumni-badge-navy i { color: #1d2b4b; }
+        .alumni-badge-slate { background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
+        .alumni-badge-slate i { color: #64748b; }
+        .alumni-badge-field { align-self: flex-start; background: rgba(63,81,181,0.08); color: #3f51b5; }
+        .alumni-badge-field i { color: #3f51b5; font-size: 9px; }
+        .alumni-career {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 10px;
+          flex: 1 1 auto;
+          min-width: 0;
+          min-height: 72px;
+        }
+        .alumni-career-icon {
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          background: rgba(29,43,75,0.06);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 auto;
+          color: #1d2b4b;
+          font-size: 11px;
+        }
+        .alumni-card-line { font-size: 0.72rem; font-weight: 600; line-height: 1.35; color: #64748b; }
+        .alumni-card-line-strong {
+          font-weight: 700;
+          color: #1d2b4b;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .alumni-actions {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: stretch;
+          gap: 8px;
+          margin-top: auto;
+          padding: 14px 20px 18px;
+          border-top: 1px solid #f1f5f9;
+        }
+        .alumni-action {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          min-width: 0;
+          min-height: 38px;
+          border-radius: 12px;
+          padding: 9px 14px;
+          font-size: 0.72rem;
+          font-weight: 700;
+          line-height: 1.2;
+          text-decoration: none;
+          box-sizing: border-box;
+        }
+        .alumni-action-primary {
+          flex: 1 1 140px;
+          background: #1d2b4b;
+          color: #fff;
+        }
+        .alumni-action-primary i { color: #fdb813; font-size: 10px; }
+        .alumni-action-primary:hover { background: #3f51b5; }
+        .alumni-action-yearbook {
+          flex: 1 1 120px;
+          background: rgba(253,184,19,0.12);
+          border: 1.5px solid rgba(253,184,19,0.3);
+          color: #92590e;
+        }
+        .alumni-action-yearbook:hover { background: #fdb813; color: #1d2b4b; }
+        .alumni-action-muted {
+          flex: 0 0 auto;
+          color: #cbd5e1;
+          padding-inline: 10px;
+        }
+        @media (max-width: 640px) {
+          .alumni-page-main { padding: 24px 16px 56px !important; }
+          .alumni-grid { gap: 16px; }
+        }
       `}</style>
 
       <Navbar />
@@ -465,7 +597,7 @@ export default function AlumniTrackerPage() {
       </header>
 
       {/* Content */}
-      <main style={{ flex: 1, padding: '40px 8% 80px' }}>
+      <main className="alumni-page-main" style={{ flex: 1, padding: '32px 6% 72px' }}>
 
         <div style={{ marginBottom: 32 }}>
           <FilterBar
@@ -498,7 +630,7 @@ export default function AlumniTrackerPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: NAVY }}>
             {loading ? 'Loading…' : `${visibleAlumni.length} Alumni`}
           </h2>
@@ -535,11 +667,11 @@ export default function AlumniTrackerPage() {
         )}
 
         {!loading && visibleAlumni.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 24 }}>
+          <div className="alumni-grid">
             {visibleAlumni.map((alumni, i) => (
               <div
                 key={alumni.id}
-                className="alumni-card-anim"
+                className="alumni-grid-item alumni-card-anim"
                 style={{ animationDelay: `${i * 40}ms` }}
                 id={alumni.id === Number(highlightAlumniId) ? 'highlighted-alumni' : undefined}
               >

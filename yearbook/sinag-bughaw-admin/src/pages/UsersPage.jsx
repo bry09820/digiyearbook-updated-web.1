@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import api from "../services/api";
+import api, { notifyAdminAccountsChanged } from "../services/api";
 
 const cx = (...v) => v.filter(Boolean).join(" ");
 
@@ -44,7 +44,18 @@ function Badge({ label, tone = "default" }) {
   );
 }
 
-function roleBadge(role) {
+function standingBadge(user) {
+  const role = String(user.role || "").toLowerCase();
+  if (role === "faculty" || role === "admin") return <span className="text-xs text-slate-400">—</span>;
+  const year = Number(user.graduation_year);
+  const alumni = Boolean(user.is_alumni)
+    || role === "alumni"
+    || user.academic_status === "Alumni"
+    || (Number.isFinite(year) && year > 0 && year <= new Date().getFullYear());
+  return roleBadge(alumni ? "alumni" : "student", alumni ? "Alumni" : "Current Student");
+}
+
+function roleBadge(role, label) {
   const map = {
     student: { label: "Student", tone: "indigo" },
     alumni: { label: "Alumni", tone: "emerald" },
@@ -52,7 +63,7 @@ function roleBadge(role) {
     admin: { label: "Admin", tone: "amber" },
   };
   const s = map[role] ?? { label: role ?? "—", tone: "default" };
-  return <Badge {...s} />;
+  return <Badge label={label || s.label} tone={s.tone} />;
 }
 
 function statusBadge(user) {
@@ -363,12 +374,12 @@ function Pagination({ meta, onPage }) {
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
   const [meta, setMeta] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [verifiedOnly, setVerifiedOnly] = useState(false);
 
   const [editUser, setEditUser] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -388,6 +399,7 @@ export default function UsersPage() {
       const res = await api.get("/admin/users", { params });
       setUsers(res.data.data ?? []);
       setMeta(res.data.meta ?? res.data);
+      setSummary(res.data.summary ?? null);
     } catch {
       toast("Failed to load users.", "error");
     } finally {
@@ -446,6 +458,7 @@ export default function UsersPage() {
       }
       setConfirm(null);
       fetchUsers(page, search, roleFilter, statusFilter);
+      if (type === "delete" || type === "verify") notifyAdminAccountsChanged();
     } catch {
       toast("Action failed. Please try again.", "error");
     } finally {
@@ -461,9 +474,8 @@ export default function UsersPage() {
     delete: { title: "Delete User", message: (u) => `Permanently delete ${u.first_name} ${u.last_name}? This cannot be undone.`, label: "Delete", color: "danger" },
   };
 
-  const displayedUsers = verifiedOnly
-    ? users.filter((u) => Boolean(u.email_verified))
-    : users;
+  const displayedUsers = users;
+  const verifiedOnly = statusFilter === "verified";
 
   return (
     <>
@@ -472,6 +484,23 @@ export default function UsersPage() {
           <h1 className="text-3xl font-black tracking-tight text-slate-800">User Management</h1>
           <p className="mt-1 text-sm text-slate-500">View, moderate, and manage all registered users.</p>
         </div>
+
+        {summary && (
+          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+            {[
+              ["Registered users", summary.total_users],
+              ["Current students", summary.total_students],
+              ["Alumni", summary.total_alumni],
+              ["Verified", summary.verified_users],
+              ["Unverified", summary.unverified_users],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
+                <div className="mt-1 text-2xl font-black text-slate-800">{Number(value ?? 0).toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <input
@@ -518,7 +547,7 @@ export default function UsersPage() {
               <button
                 key={option.label}
                 type="button"
-                onClick={() => setVerifiedOnly(option.value)}
+                onClick={() => handleFilter("status", option.value ? "verified" : "")}
                 className={cx(
                   "rounded-lg px-3.5 py-2 text-sm font-bold transition",
                   verifiedOnly === option.value
@@ -537,7 +566,7 @@ export default function UsersPage() {
             <table className="w-full table-auto border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  {["User", "Student ID", "Course / Batch", "Role", "Status", "Registered", "Actions"].map((h) => (
+                  {["User", "Student ID", "Course / Batch", "Role", "Standing", "Status", "Registered", "Actions"].map((h) => (
                     <th key={h} className="whitespace-nowrap px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
                       {h}
                     </th>
@@ -548,7 +577,7 @@ export default function UsersPage() {
                 {loading
                   ? Array.from({ length: 8 }).map((_, i) => (
                       <tr key={i} className="border-b border-slate-200">
-                        {Array.from({ length: 7 }).map((_, j) => (
+                        {Array.from({ length: 8 }).map((_, j) => (
                           <td key={j} className="px-4 py-3.5">
                             <Skeleton className="h-3.5" style={{ width: `${j === 0 ? 140 : j === 6 ? 60 : 90}px` }} />
                           </td>
@@ -558,7 +587,7 @@ export default function UsersPage() {
                   : displayedUsers.length === 0
                     ? (
                         <tr>
-                          <td colSpan={7} className="px-6 py-12 text-center text-sm text-slate-500">
+                          <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
                             No users found.
                           </td>
                         </tr>
@@ -601,6 +630,7 @@ export default function UsersPage() {
                             <div className="text-xs text-slate-500">{u.batch ? `Batch ${u.batch}` : ""} {u.graduation_year ? `· ${u.graduation_year}` : ""}</div>
                           </td>
                           <td className="px-4 py-3.5 text-sm text-slate-800">{roleBadge(u.role)}</td>
+                          <td className="px-4 py-3.5 text-sm text-slate-800">{standingBadge(u)}</td>
                           <td className="px-4 py-3.5 text-sm text-slate-800">{statusBadges(u)}</td>
                           <td className="px-4 py-3.5 text-xs text-slate-500">
                             {u.created_at ? new Date(u.created_at).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" }) : "—"}
@@ -643,6 +673,7 @@ export default function UsersPage() {
           onSaved={() => {
             setEditUser(null);
             fetchUsers(page);
+            notifyAdminAccountsChanged();
           }}
           toast={toast}
         />

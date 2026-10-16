@@ -23,7 +23,7 @@ class YearbookGeneratorService
     public function buildPageData(Yearbook $yearbook, Batch $batch): array
     {
         $pages    = [];
-        $students = $batch->students()->where('role', 'student')->orderBy('name')->get();
+        $students = $batch->students()->orderBy('last_name')->orderBy('first_name')->get();
 
         // Student portraits
         $pages[] = [
@@ -50,7 +50,7 @@ class YearbookGeneratorService
 
         // Quotes from student mottos
         $quotes = $students->whereNotNull('motto')->take(6)
-            ->map(fn ($s) => ['text' => $s->motto, 'author' => $s->name])
+            ->map(fn ($s) => ['text' => $s->motto, 'author' => trim(($s->first_name ?? '') . ' ' . ($s->last_name ?? ''))])
             ->values()->toArray();
 
         if (count($quotes) > 0) {
@@ -130,7 +130,7 @@ class YearbookGeneratorService
     protected function mapStudents(Collection $students): array
     {
         return $students->map(fn ($s) => [
-            'name'     => $s->name,
+            'name'     => trim(($s->first_name ?? '') . ' ' . ($s->last_name ?? $s->name ?? '')),
             'initials' => strtoupper(
                 substr($s->first_name ?? $s->name, 0, 1) .
                 substr($s->last_name  ?? '',        0, 1)

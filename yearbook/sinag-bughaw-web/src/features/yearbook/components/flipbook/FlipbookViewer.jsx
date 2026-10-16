@@ -14,6 +14,7 @@ import SearchPanel            from '../sidebar/SearchPanel';
 import BookmarkPanel          from '../sidebar/BookmarkPanel';
 import { PAGE_W, PAGE_H }      from '../pages/pageStyles';
 import { useFlipbookAlumniLink } from '../../../../hooks/useFlipbookAlumniLink';
+import { discoveryRecordPath } from '@/utils/studentProfilePath';
 
 const GOLD       = '#fdb813';
 const NAVY       = '#1d2b4b';
@@ -149,7 +150,7 @@ export default function FlipbookViewer({
 
   // Portrait click -> discovery student profile page.
   const handlePortraitClick = useCallback((studentId) => {
-    navigate(`/discover/students/${studentId}`);
+    navigate(discoveryRecordPath(studentId));
   }, [navigate]);
 
   const handleViewInTracker = useCallback(() => {

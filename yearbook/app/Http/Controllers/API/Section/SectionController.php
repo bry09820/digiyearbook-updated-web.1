@@ -4,25 +4,25 @@ namespace App\Http\Controllers\API\Section;
 
 use App\Http\Controllers\Controller;
 use App\Models\Section;
-use App\Models\Student;
 use App\Services\Student\BatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class SectionController extends Controller
 {
+    public function __construct(private readonly BatchService $batches) {}
+
     // GET /api/sections 
-    // All sections with student count + avatar preview.
+    // All sections with the count of active registered accounts.
 
     public function index(Request $request): JsonResponse
     {
-        $query = Section::withCount('students')
-            ->with([
-                'batch:id,name,graduation_year,department',
-                'students' => fn ($q) => $q
-                    ->select('id', 'first_name', 'last_name', 'photo', 'section_id')
-                    ->take(5),
-            ]);
+        $people = $this->batches->registeredAccounts();
+        $counts = $people->countBy(fn (array $person) => (int) ($person['section_id'] ?? 0));
+
+        $query = Section::query()
+            ->campusYears()
+            ->with('batch:id,name,graduation_year,department');
 
         if ($request->filled('batch_id')) {
             $query->where('batch_id', $request->batch_id);
@@ -36,7 +36,28 @@ class SectionController extends Controller
             }
         }
 
-        return response()->json($query->orderBy('name')->get());
+        $sections = $query->orderBy('name')->get()->map(function (Section $section) use ($counts, $people) {
+            $registered = (int) ($counts[(int) $section->id] ?? 0);
+            $preview = $people
+                ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id)
+                ->take(5)
+                ->map(fn (array $person) => [
+                    'id' => $person['student_record_id'] ?? $person['id'],
+                    'first_name' => $person['first_name'],
+                    'last_name' => $person['last_name'],
+                    'photo' => $person['profile_picture'],
+                    'section_id' => $person['section_id'],
+                ])
+                ->values();
+
+            $section->setAttribute('students_count', $registered);
+            $section->setAttribute('registered_count', $registered);
+            $section->setRelation('students', $preview);
+
+            return $section;
+        });
+
+        return response()->json($sections);
     }
 
     // GET /api/sections/{id} 
@@ -50,63 +71,42 @@ class SectionController extends Controller
         $section = Section::with('batch:id,name,graduation_year,department')
             ->findOrFail($id);
 
-        // Base Student query 
-
-        $studentQuery = Student::where('section_id', $id)
-            ->orderBy('last_name')
-            ->orderBy('first_name');
-
-        if (! $isPremium) {
-            // Free tier: limited columns no premium yearbook fields
-            $studentQuery->select([
-                'id',
-                'first_name',
-                'last_name',
-                'photo',
-                'student_no',
-                'course',
-                'graduation_year',
-                'section_id',
-                'batch_id',
+        $people = $this->batches->registeredAccounts()
+            ->filter(fn (array $person) => (int) ($person['section_id'] ?? 0) === $id)
+            ->sortBy([
+                ['last_name', 'asc'],
+                ['first_name', 'asc'],
+            ])
+            ->values()
+            ->map(fn (array $person) => [
+                'id' => $person['student_record_id'] ?? $person['id'],
+                'user_id' => $person['id'],
+                'student_record_id' => $person['student_record_id'],
+                'first_name' => $person['first_name'],
+                'last_name' => $person['last_name'],
+                'photo' => $person['profile_picture'],
+                'student_no' => $person['student_no'],
+                'course' => $person['course'],
+                'graduation_year' => $person['graduation_year'],
+                'section_id' => $person['section_id'],
             ]);
-        } else {
-            // Premium: all public + yearbook fields
-            $studentQuery->select([
-                'id',
-                'first_name',
-                'last_name',
-                'middle_name',
-                'nickname',
-                'photo',
-                'student_no',
-                'email',
-                'course',
-                'graduation_year',
-                'section_id',
-                'batch_id',
-                'honors',
-                'organizations',
-                'motto',
-                'student_quote',
-                'ambition',
-                'future_plans',
-                'most_likely_to',
-                'achievements',
-                'facebook_url',
-                'instagram_url',
-                'linkedin_url',
-                'github_url',
-            ]);
-        }
 
-        $students = $studentQuery->paginate(30);
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = 30;
+        $students = new \Illuminate\Pagination\LengthAwarePaginator(
+            $people->forPage($page, $perPage)->values(),
+            $people->count(),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
 
         return response()->json([
             'section'    => $section,
             'students'   => $students,
             'is_premium' => $isPremium,
-            'total'      => $section->students()->count(),
-            'visible'    => $students->total(),
+            'total'      => $people->count(),
+            'visible'    => $people->count(),
         ]);
     }
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import api from "../services/api";
+import api, { notifyAdminAccountsChanged } from "../services/api";
 import { PageHdr, Flash, Card, CardHead, EmptyState } from "../components/shared/Card";
 import { Pager } from "../components/shared/Table";
 import Btn from "../components/shared/Btn";
@@ -249,6 +249,7 @@ export default function FacultyPage({ showToast }) {
         headers: { "Content-Type": "multipart/form-data" },
       });
       showFlash("Faculty profile added successfully.");
+      notifyAdminAccountsChanged();
       formRef.current?.reset();
       setAddForm(defaultFacultyForm());
       clearAddPhoto();
@@ -272,6 +273,7 @@ export default function FacultyPage({ showToast }) {
         headers: { "Content-Type": "multipart/form-data" },
       });
       showFlash("Faculty profile updated successfully.");
+      notifyAdminAccountsChanged();
       setEditing(null);
       load(page, search);
     } catch (err) {
@@ -287,6 +289,7 @@ export default function FacultyPage({ showToast }) {
     try {
       await api.delete(`/admin/faculty/${confirm.id}`);
       showToast?.(`${confirm.name} deleted`, "error");
+      notifyAdminAccountsChanged();
       setConfirm(null);
       const newPage = list.length === 1 && page > 1 ? page - 1 : page;
       setPage(newPage);
@@ -314,6 +317,7 @@ export default function FacultyPage({ showToast }) {
       const imported = res.data?.imported ?? 0;
       const skipped = res.data?.skipped ?? 0;
       showFlash(`CSV imported: ${imported} added, ${skipped} skipped.`);
+      notifyAdminAccountsChanged();
       setCsvFile(null);
       if (csvRef.current) csvRef.current.value = "";
       setPage(1);

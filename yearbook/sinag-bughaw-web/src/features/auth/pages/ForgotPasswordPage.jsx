@@ -1,16 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '@/api/auth.api';
+import { usePlatformStats } from '@/utils/platformStats';
 
 // steps: 'email' 'otp' 'reset' 'done'
 
-const STATS = [
-  { value: '12,500+', label: 'Graduates' },
-  { value: '35+',     label: 'Programs'  },
-  { value: '50k+',    label: 'Photos'    },
-];
-
 export default function ForgotPasswordPage() {
+  const stats = usePlatformStats();
   const navigate = useNavigate();
 
   const [step,         setStep]        = useState('email');
@@ -143,7 +139,7 @@ export default function ForgotPasswordPage() {
             </p>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            {STATS.map(({ value, label }) => (
+            {stats.map(({ value, label }) => (
               <div key={label} className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-center border border-white/10">
                 <p className="text-[#fdb813] font-black text-xl m-0 leading-none">{value}</p>
                 <p className="text-white/55 text-xs m-0 mt-1.5">{label}</p>

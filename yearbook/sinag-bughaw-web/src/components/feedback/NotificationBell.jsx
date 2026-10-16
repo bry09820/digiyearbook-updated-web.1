@@ -28,9 +28,6 @@ function typeStyle(type) {
       return { icon: 'fa-tag', bubble: 'bg-emerald-50 text-emerald-500' };
     case 'media_approved':
       return { icon: 'fa-circle-check', bubble: 'bg-emerald-50 text-emerald-500' };
-    case 'voice_note_received':
-    case 'voice_note_approved':
-      return { icon: 'fa-microphone', bubble: 'bg-amber-50 text-amber-600' };
     case 'announcement': return { icon: 'fa-bell', bubble: 'bg-amber-50 text-amber-600' };
     case 'profile_update': return { icon: 'fa-user-check', bubble: 'bg-emerald-50 text-emerald-500' };
     default: return { icon: 'fa-bell', bubble: 'bg-slate-100 text-slate-500' };
@@ -52,17 +49,14 @@ function notificationTarget(notification) {
         const studentMatch = parsed.pathname.match(/^\/students\/([^/]+)/);
         if (studentMatch) return `/profile/${studentMatch[1]}${parsed.search}${parsed.hash}`;
       }
+      if (parsed.pathname.includes('voice-notes') || parsed.search.includes('voicenotes')) return '/profile';
       return `${parsed.pathname}${parsed.search}${parsed.hash}`;
     } catch {
       return actionUrl;
     }
   }
 
-  if (type.includes('announcement')) return null;
-  if (type === 'voice_note_received' || type === 'voice_note_approved') {
-    const voiceNoteId = data.voice_note_id ?? notification.voice_note_id;
-    return `/profile?tab=voicenotes${voiceNoteId ? `&note=${encodeURIComponent(voiceNoteId)}` : ''}`;
-  }
+  if (type.includes('announcement')) return '/announcements';
   if (type === 'photo_tagged' || type === 'tag') {
     if (photoOwnerId && photoId) return `/profile/${photoOwnerId}?post=${photoId}`;
     if (receiverId) return `/profile/${receiverId}?tab=tagged`;
@@ -153,7 +147,7 @@ export default function NotificationBell() {
       const { data } = await notificationsApi.list();
       const list = dedupeSubscriptionNotifications(data.data ?? data ?? []);
       setNotifications(list);
-      setUnread(list.filter((n) => !n.read_at).length);
+      setUnread(list.filter((n) => n.is_read !== true && !n.read_at).length);
     } finally {
       if (!silent) setLoading(false);
     }
@@ -161,7 +155,7 @@ export default function NotificationBell() {
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => fetchNotifications(), 0);
-    pollRef.current = setInterval(() => fetchNotifications(true), 20000);
+    pollRef.current = setInterval(() => fetchNotifications(true), 8000);
     return () => {
       window.clearTimeout(initialTimer);
       clearInterval(pollRef.current);
@@ -255,18 +249,23 @@ export default function NotificationBell() {
                 const data = n.data ?? {};
                 const type = data.type ?? n.type ?? 'default';
                 const st = typeStyle(type);
-                const isUnread = !n.read_at;
+                const isUnread = n.is_read !== true && !n.read_at;
                 const titleSender = ['message', 'chat', 'new_message'].includes(type)
                   ? messageSenderFromTitle(n.title)
                   : null;
-                const sender =
-                  data.sender_name ??
-                  data.tagger_name ??
-                  data.actor_name ??
-                  n.sender_name ??
-                  titleSender ??
-                  (type === 'announcement' ? 'Announcement' : 'Someone');
-                const preview = data.message ?? n.body ?? n.message ?? n.title ?? 'Sent you a notification';
+                const sender = type === 'announcement'
+                  ? (n.title || data.title || 'Announcement')
+                  : (
+                    data.sender_name ??
+                    data.tagger_name ??
+                    data.actor_name ??
+                    n.sender_name ??
+                    titleSender ??
+                    'Someone'
+                  );
+                const preview = type === 'announcement'
+                  ? (n.body || data.body || 'New announcement')
+                  : (data.message ?? n.body ?? n.message ?? n.title ?? 'Sent you a notification');
                 const avatar = notificationAvatar(n);
                 const target = notificationTarget(n);
                 const itemClasses = `flex items-start gap-3 border-b border-slate-50 px-5 py-3.5 text-inherit no-underline transition hover:bg-slate-50 ${isUnread ? 'bg-[#fafbff]' : 'bg-white'}`;

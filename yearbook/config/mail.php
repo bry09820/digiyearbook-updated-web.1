@@ -7,13 +7,11 @@ return [
     | Default Mailer
     |--------------------------------------------------------------------------
     |
-    | Use "log" for local/mobile OTP testing (codes appear in storage/logs).
-    | Use "smtp" for Brevo / Mailtrap / Gmail.
-    | Use "failover" to try SMTP first, then fall back to log.
+    | SMTP is the standard mailer (Brevo on port 587).
     |
     */
 
-    'default' => env('MAIL_MAILER', 'log'),
+    'default' => env('MAIL_MAILER', 'smtp'),
 
     'mailers' => [
 

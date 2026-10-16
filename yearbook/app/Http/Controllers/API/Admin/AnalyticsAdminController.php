@@ -9,9 +9,12 @@ use App\Models\PostMedia;
 use App\Models\VoiceNote;
 use App\Models\TaggedPhoto;
 use App\Models\ProfileView;
+use App\Models\Batch;
+use App\Models\Section;
 use App\Models\User;
 use App\Models\UserPresence;
 use App\Services\Analytics\EngagementAnalyticsService;
+use App\Services\Student\BatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,15 +23,30 @@ use Carbon\Carbon;
 class AnalyticsAdminController extends Controller
 {
     public function __construct(
-        private readonly EngagementAnalyticsService $analytics
+        private readonly EngagementAnalyticsService $analytics,
+        private readonly BatchService $batches,
     ) {}
 
     public function overview(): JsonResponse
     {
         $contentViews = DB::table('content_views');
 
+        $directory = $this->batches->directoryTotals();
+        $people = $this->batches->registeredAccounts();
+        $accounts = User::accountCensus();
+
         return response()->json([
-            'total_users'    => User::where('role', 'student')->count(),
+            'total_users'    => $accounts['total_users'],
+            'total_batches'  => $directory['batches'],
+            'total_sections' => $directory['sections'],
+            'total_students' => $accounts['total_students'],
+            'total_alumni'   => $accounts['total_alumni'],
+            'verified_users' => $accounts['verified_users'],
+            'unverified_users' => $accounts['unverified_users'],
+            'suspended_users' => $accounts['suspended_users'],
+            'faculty_members' => $accounts['faculty_members'],
+            'admin_accounts' => $accounts['admin_accounts'],
+            'enrolled_students' => $people->filter(fn (array $person) => ! empty($person['section_id']))->count(),
             'total_views'    => ProfileView::count() + (clone $contentViews)->count(),
             'views_today'    => ProfileView::whereDate('created_at', today())->count()
                 + (clone $contentViews)->whereDate('created_at', today())->count(),
@@ -36,7 +54,32 @@ class AnalyticsAdminController extends Controller
             'online_now'     => UserPresence::where('is_online', true)
                 ->where('last_seen_at', '>=', now()->subMinutes(5))
                 ->count(),
-        ]);
+            'active_users'   => UserPresence::where('last_seen_at', '>=', now()->subDay())->count(),
+            'by_section'     => Section::query()
+                ->orderBy('name')
+                ->get(['id', 'name', 'course', 'batch_id'])
+                ->map(fn (Section $section) => [
+                    'id'             => $section->id,
+                    'name'           => $section->name,
+                    'course'         => $section->course,
+                    'students_count' => $people->filter(
+                        fn (array $person) => (int) ($person['section_id'] ?? 0) === (int) $section->id
+                    )->count(),
+                ]),
+            'by_batch'       => Batch::query()
+                ->campusYears()
+                ->orderByDesc('graduation_year')
+                ->get(['id', 'name', 'graduation_year'])
+                ->map(fn (Batch $batch) => [
+                    'id'              => $batch->id,
+                    'name'            => $batch->name,
+                    'graduation_year' => $batch->graduation_year,
+                    'students_count'  => $people->filter(
+                        fn (array $person) => (int) ($person['graduation_year'] ?? 0) === (int) $batch->graduation_year
+                    )->count(),
+                ]),
+        ])->header('Cache-Control', 'no-store, private, max-age=0')
+          ->header('Pragma', 'no-cache');
     }
 
     public function viewsTrend(Request $request): JsonResponse

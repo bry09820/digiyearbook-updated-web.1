@@ -4,7 +4,6 @@ namespace Database\Seeders;
 
 use App\Models\Admin;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Hash;
 
 class AdminSeeder extends Seeder
 {
@@ -17,7 +16,7 @@ class AdminSeeder extends Seeder
             ['username' => 'superadmin'],
             [
                 'name'      => 'Super Administrator',
-                'password'  => Hash::make($superPassword),
+                'password'  => $superPassword,
                 'role'      => Admin::ROLE_SUPER_ADMIN,
                 'is_active' => true,
             ]
@@ -27,7 +26,7 @@ class AdminSeeder extends Seeder
             ['username' => 'admin'],
             [
                 'name'       => 'Default Admin',
-                'password'   => Hash::make($adminPassword),
+                'password'   => $adminPassword,
                 'role'       => Admin::ROLE_ADMIN,
                 'is_active'  => true,
                 'created_by' => $super->id,

@@ -39,4 +39,4 @@ Route::middleware(['auth:sanctum', 'verified', 'active.account'])->group(functio
 // lookahead keeps Google OAuth + billing routes above from being swallowed.
 Route::get('/{any?}', function () {
     return view('app');
-})->where('any', '^(?!(auth|app/auth|billing|checkout)(/|$)).*');
+})->where('any', '^(?!(auth|app/auth|billing|checkout|docs)(/|$)).*');

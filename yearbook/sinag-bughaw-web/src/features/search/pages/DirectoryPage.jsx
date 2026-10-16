@@ -12,6 +12,8 @@ import { imageUrl, avatarUrl } from '@/utils/imageUrl';
 import { COURSE_FILTERS, getCourseShort } from '@/utils/courseShort';
 import { useSubscriptionGuard } from '@/features/subscription/hooks/useSubscriptionGuard';
 import { useAppConfig } from '@/features/platform/AppConfigProvider';
+import { directoryProfilePath } from '@/utils/studentProfilePath';
+import { pageCacheKey, readPageCache, writePageCache } from '@/utils/pageCache';
 
 // Constants
 const faceUserId = (match) => {
@@ -54,13 +56,11 @@ const isUsableStudentPhoto = (photo) => {
 function AutocompleteDropdown({ suggestions, onSelect, visible }) {
   if (!visible || !suggestions.length) return null;
   return (
-    <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-2xl
-                    shadow-[0_24px_60px_rgba(29,43,75,0.18)] border border-indigo-100/50 overflow-hidden">
+    <div className="absolute left-0 right-0 top-full z-[80] mt-2 max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-[0_18px_44px_rgba(29,43,75,0.18)]">
       {suggestions.map((s, i) => (
         <button key={s.id} onMouseDown={() => onSelect(s)}
-          className={`w-full flex items-center gap-3 px-5 py-3 text-left border-none bg-transparent
-                      cursor-pointer hover:bg-slate-50 transition-colors
-                      ${i < suggestions.length - 1 ? 'border-b border-slate-50' : ''}`}>
+          className={`flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent px-3 py-2.5 text-left transition-colors hover:bg-slate-50
+                      ${i < suggestions.length - 1 ? 'border-b border-slate-100' : ''}`}>
           <div className="w-9 h-9 rounded-xl bg-[#1d2b4b] text-[#fdb813] flex items-center justify-center
                           font-black text-sm overflow-hidden shrink-0">
             {s.profile_picture
@@ -201,7 +201,7 @@ function StudentCard({ student, index, isMatched, matchData, locked = false, onL
 
   return (
     <Link
-      to={`/students/${student.user_id ?? student.id}`}
+      to={directoryProfilePath(student)}
       className={cardClassName}
       style={cardStyle}
     >
@@ -220,13 +220,15 @@ export default function DirectoryPage() {
   const premiumEnabled = isOn('enable_premium_subscription');
   const profilesLocked = premiumEnabled && !isSubscribed;
 
-  const [students, setStudents] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [query,    setQuery]    = useState(searchParams.get('q') || '');
+  const initialQuery = searchParams.get('q') || '';
+  const cachedDirectory = readPageCache(pageCacheKey(['directory', initialQuery, 'All Programs', 1]));
+  const [students, setStudents] = useState(cachedDirectory?.students ?? []);
+  const [loading,  setLoading]  = useState(!cachedDirectory);
+  const [query,    setQuery]    = useState(initialQuery);
   const [course,   setCourse]   = useState('All Programs');
-  const [total,    setTotal]    = useState(0);
+  const [total,    setTotal]    = useState(cachedDirectory?.total ?? 0);
   const [page,     setPage]     = useState(1);
-  const [lastPage, setLastPage] = useState(1);
+  const [lastPage, setLastPage] = useState(cachedDirectory?.lastPage ?? 1);
 
   const [suggestions,    setSuggestions]    = useState([]);
   const [showSuggest,    setShowSuggest]    = useState(false);
@@ -249,18 +251,33 @@ export default function DirectoryPage() {
 
   // Fetch students
   const fetchStudents = useCallback(async (q = query, c = course, p = 1) => {
-    setLoading(true);
+    const cacheKey = pageCacheKey(['directory', q, c, p]);
+    const cached = readPageCache(cacheKey);
+    if (cached) {
+      setStudents(cached.students);
+      setTotal(cached.total);
+      setLastPage(cached.lastPage);
+      setPage(p);
+    } else {
+      setLoading(true);
+    }
     try {
       const params = { per_page: 20, page: p };
       if (q) params.q = q;
       if (c !== 'All Programs') params.course = c;
       const { data } = await studentsApi.search(params);
-      setStudents(data.data ?? []);
-      setTotal(data.meta?.total ?? (data.data ?? []).length);
-      setLastPage(data.meta?.last_page ?? 1);
+      const next = {
+        students: data.data ?? [],
+        total: data.meta?.total ?? (data.data ?? []).length,
+        lastPage: data.meta?.last_page ?? 1,
+      };
+      writePageCache(cacheKey, next);
+      setStudents(next.students);
+      setTotal(next.total);
+      setLastPage(next.lastPage);
       setPage(p);
     } catch {
-      setStudents([]);
+      if (!cached) setStudents([]);
     } finally {
       setLoading(false);
     }
@@ -352,13 +369,15 @@ export default function DirectoryPage() {
       <Navbar />
 
       {/* Hero / Search Header */}
-      <header
-        className="relative min-h-[140px] px-5 sm:px-[8%] py-8 text-center text-white rounded-b-[28px] shadow-lg overflow-hidden"
-        style={{ background: "linear-gradient(135deg,rgba(29,43,75,0.95),rgba(63,81,181,0.88)), url('/images/NU-building.jpg') center/cover no-repeat" }}
-      >
-        {/* Dot pattern */}
-        <div className="absolute inset-0 opacity-[0.05] pointer-events-none"
-          style={{ backgroundImage: 'radial-gradient(circle, #fdb813 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }} />
+      <header className="relative z-40 min-h-[140px] rounded-b-[28px] px-5 py-8 text-center text-white shadow-lg sm:px-[8%]">
+        <div
+          className="pointer-events-none absolute inset-0 overflow-hidden rounded-b-[28px]"
+          style={{ background: "linear-gradient(135deg,rgba(29,43,75,0.95),rgba(63,81,181,0.88)), url('/images/NU-building.jpg') center/cover no-repeat" }}
+        />
+        <div
+          className="pointer-events-none absolute inset-0 overflow-hidden rounded-b-[28px] opacity-[0.05]"
+          style={{ backgroundImage: 'radial-gradient(circle, #fdb813 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }}
+        />
 
         <div className="relative z-10">
           <span className="inline-flex items-center gap-2 bg-[#fdb813]/15 border border-[#fdb813]/30 text-[#fdb813]
@@ -394,14 +413,11 @@ export default function DirectoryPage() {
                 />
                 <FaceSearchButton onFile={handleFaceFile} loading={faceSearching} />
 
-                {/* Autocomplete */}
-                <div className="absolute left-0 right-0 z-50">
-                  <AutocompleteDropdown
-                    suggestions={suggestions}
-                    onSelect={handleSuggestSelect}
-                    visible={showSuggest}
-                  />
-                </div>
+                <AutocompleteDropdown
+                  suggestions={suggestions}
+                  onSelect={handleSuggestSelect}
+                  visible={showSuggest}
+                />
               </div>
             </div>
 
@@ -411,7 +427,7 @@ export default function DirectoryPage() {
       </header>
 
       {/* Course filters */}
-      <nav className="border-b border-slate-200 bg-white px-5 py-3 shadow-sm sm:px-[8%]" aria-label="Filter students by program">
+      <nav className="relative z-10 border-b border-slate-200 bg-white px-5 py-3 shadow-sm sm:px-[8%]" aria-label="Filter students by program">
         <div className="mx-auto max-w-[1180px]">
           <FilterTabStrip
             ariaLabel="Filter students by program"
@@ -463,7 +479,7 @@ export default function DirectoryPage() {
         )}
 
         {/* Loading */}
-        {loading ? (
+        {loading && visibleStudents.length === 0 ? (
           <LoadingSkeleton variant="card" count={8} />
 
         ) : visibleStudents.length === 0 ? (

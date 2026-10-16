@@ -14,9 +14,13 @@ use App\Models\PostMedia;
 use App\Models\TaggedPhoto;
 use App\Models\User;
 use App\Notifications\PhotoTaggedNotification;
+use App\Services\Storage\LocalStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class ProfileController extends Controller
 {
@@ -32,7 +36,14 @@ class ProfileController extends Controller
         $isSubscribed = $request->attributes->get('viewer_is_subscribed', false);
         $viewer       = Auth::user();
         $profileOwner = User::with('studentRecord')->findOrFail($id);
-        $isBatchmate  = $viewer instanceof User && $this->areBatchmates($viewer, $profileOwner);
+        $isBatchmate  = $viewer instanceof User && $profileOwner->sharesBatchYearWith($viewer);
+
+        if (! $profileOwner->canBeViewedBy($viewer instanceof User ? $viewer : null)) {
+            return response()->json(array_merge($profileOwner->visibilityDenialPayload(), [
+                'success' => false,
+                'data' => ['data' => []],
+            ]), 403);
+        }
 
         if (! $isOwner && ! $isSubscribed) {
             return response()->json([
@@ -54,10 +65,13 @@ class ProfileController extends Controller
             ->with([
                 'user:id,name',
                 'user.studentRecord:id,course,photo',         
+                'taggedUsers:id,name',
+                'taggedUsers.studentRecord:id,course,photo',
                 'taggedStudents:id,name',
-                'taggedStudents.studentRecord:id,course,photo', 
+                'taggedStudents.studentRecord:id,course,photo',
                 'media',
             ])
+            ->withCount('postViews as unique_views_count')
             ->latest()
             ->paginate(12);
 
@@ -98,6 +112,10 @@ class ProfileController extends Controller
             ],
         )));
 
+        if (! $request->hasFile('files') && $request->hasFile('photos')) {
+            $request->files->set('files', $request->file('photos'));
+        }
+
         $request->validate([
             'files'             => ['required', 'array', 'min:1', 'max:20'],
             'files.*'           => [
@@ -105,7 +123,7 @@ class ProfileController extends Controller
                 function ($attribute, $value, $fail) use ($allowedMimes) {
                     $mime = $value->getMimeType();
                     if (! in_array($mime, $allowedMimes, true)) {
-                        $fail("File type [{$mime}] is not allowed by platform settings.");
+                        $fail("File type [{$mime}] is not allowed.");
                     }
                 },
                 'max:' . $maxKb,
@@ -114,6 +132,8 @@ class ProfileController extends Controller
             'visibility'        => ['nullable', 'in:public,batchmates,friends,private'],
             'tagged_user_ids'   => ['nullable', 'array'],
             'tagged_user_ids.*' => ['integer', 'exists:users,id'],
+            'tagged_users'      => ['nullable', 'array'],
+            'tagged_users.*'    => ['integer', 'exists:users,id'],
         ]);
 
         $user = Auth::user();
@@ -132,80 +152,89 @@ class ProfileController extends Controller
         $files      = $request->file('files');
         $caption    = $request->input('caption', '');
         $visibility = $this->normalizeVisibility($request->input('visibility', 'public'));
+        $tagIds     = $this->tagIdsFromRequest($request, (int) $user->id);
 
         try {
-            $album = Album::firstOrCreate(
-                ['user_id' => $user->id, 'title' => 'My Uploads'],
-                ['type' => 'profile', 'event_date' => now()->toDateString()]
-            );
-
-            // Create ONE Photo record for all files 
-            $photo = Photo::create([
-                'album_id'        => $album->id,
-                'user_id'         => $user->id,
-                'file_path'       => '',
-                'public_id'       => '',
-                'caption'         => $caption,
-                'visibility'      => $visibility,
-                'is_profile_post' => true,
-                'status'          => 'approved',
-                'ai_metadata'     => [
-                    'resource_type' => 'image',
-                    'multi'         => count($files) > 1,
-                    'media_count'   => count($files),
-                ],
-            ]);
-
+            $stored = [];
             foreach ($files as $index => $file) {
-                $result       = $this->storage->uploadPhoto(
-                    file:   $file,
-                    userId: $user->id,
-                    folder: 'profile',
-                    options: [
-                        'skip_mime_check' => true,
-                        'skip_size_check' => true,
-                    ],
-                );
-                $resourceType = str_starts_with((string) $file->getMimeType(), 'video/') ? 'video' : 'image';
-
-                PostMedia::create([
-                    'photo_id'      => $photo->id,
-                    'file_path'     => $result['secure_url'],
-                    'public_id'     => $result['public_id'],
-                    'resource_type' => $resourceType,
-                    'bytes'         => $result['bytes']  ?? 0,
-                    'width'         => $result['width']  ?? null,
-                    'height'        => $result['height'] ?? null,
-                    'sort_order'    => $index,
-                ]);
-
-                if ($index === 0) {
-                    $photo->update([
-                        'file_path'   => $result['secure_url'],
-                        'public_id'   => $result['public_id'],
-                        'ai_metadata' => [
-                            'resource_type' => $resourceType,
-                            'bytes'         => $result['bytes']  ?? 0,
-                            'width'         => $result['width']  ?? null,
-                            'height'        => $result['height'] ?? null,
-                            'multi'         => count($files) > 1,
-                            'media_count'   => count($files),
-                        ],
-                    ]);
-                }
+                $stored[] = [
+                    'index'  => $index,
+                    'file'   => $file,
+                    'result' => $this->storeUpload($file, (int) $user->id),
+                ];
             }
 
-            // Tag people 
-            if ($request->filled('tagged_user_ids')) {
-                $this->tagUsersAndNotify(
-                    $photo,
-                    $request->input('tagged_user_ids', []),
-                    $user
+            $photo = DB::transaction(function () use ($user, $caption, $visibility, $files, $stored, $tagIds) {
+                $album = Album::firstOrCreate(
+                    ['user_id' => $user->id, 'title' => 'My Uploads'],
+                    ['type' => 'profile', 'event_date' => now()->toDateString()]
                 );
+
+                $photo = Photo::create([
+                    'album_id'        => $album->id,
+                    'user_id'         => $user->id,
+                    'file_path'       => '',
+                    'public_id'       => '',
+                    'caption'         => $caption,
+                    'visibility'      => $visibility,
+                    'is_profile_post' => true,
+                    'status'          => 'approved',
+                    'ai_metadata'     => [
+                        'resource_type' => 'image',
+                        'multi'         => count($files) > 1,
+                        'media_count'   => count($files),
+                    ],
+                ]);
+
+                foreach ($stored as $item) {
+                    $file         = $item['file'];
+                    $result       = $item['result'];
+                    $index        = $item['index'];
+                    $resourceType = str_starts_with((string) $file->getMimeType(), 'video/') ? 'video' : 'image';
+
+                    PostMedia::create([
+                        'photo_id'      => $photo->id,
+                        'file_path'     => $result['secure_url'],
+                        'public_id'     => $result['public_id'],
+                        'resource_type' => $resourceType,
+                        'bytes'         => $result['bytes']  ?? 0,
+                        'width'         => $result['width']  ?? null,
+                        'height'        => $result['height'] ?? null,
+                        'sort_order'    => $index,
+                    ]);
+
+                    if ($index === 0) {
+                        $photo->update([
+                            'file_path'   => $result['secure_url'],
+                            'public_id'   => $result['public_id'],
+                            'ai_metadata' => [
+                                'resource_type' => $resourceType,
+                                'bytes'         => $result['bytes']  ?? 0,
+                                'width'         => $result['width']  ?? null,
+                                'height'        => $result['height'] ?? null,
+                                'multi'         => count($files) > 1,
+                                'media_count'   => count($files),
+                            ],
+                        ]);
+                    }
+                }
+
+                if ($tagIds !== []) {
+                    $this->saveTags($photo, $tagIds, $user);
+                }
+
+                return $photo;
+            });
+
+            if ($tagIds !== []) {
+                $this->notifyTaggedUsers($photo, $tagIds, $user);
             }
 
             $photo->load([
                 'media',
+                'user:id,name,graduation_year,batch',
+                'taggedUsers:id,name',
+                'taggedUsers.studentRecord:id,photo',
                 'taggedStudents:id,name',
                 'taggedStudents.studentRecord:id,photo',
             ]);
@@ -218,7 +247,11 @@ class ProfileController extends Controller
                 'data' => $this->formatPost($photo),
             ], 201);
 
+        } catch (ValidationException $e) {
+            throw $e;
         } catch (StorageLimitExceededException $e) {
+            Log::error('uploadMedia storage limit', ['message' => $e->getMessage(), 'user_id' => $user->id]);
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -227,17 +260,53 @@ class ProfileController extends Controller
             ], 422);
 
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::error('uploadMedia failed', [
+            Log::error('uploadMedia failed', [
                 'message' => $e->getMessage(),
                 'line'    => $e->getLine(),
                 'file'    => $e->getFile(),
+                'user_id' => $user->id,
             ]);
+
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage(),
+                'message' => $e->getMessage() ?: 'Upload failed.',
                 'code'    => 'UPLOAD_FAILED',
             ], 500);
         }
+    }
+
+    public function searchClassmates(Request $request): JsonResponse
+    {
+        $query = trim((string) $request->get('q', ''));
+        if (mb_strlen($query) < 1) {
+            return response()->json(['data' => []]);
+        }
+
+        $viewerId = (int) Auth::id();
+        $limit    = min(8, max(1, (int) $request->get('limit', 8)));
+
+        $users = User::query()
+            ->with('studentRecord:id,course,photo')
+            ->where('id', '!=', $viewerId)
+            ->whereIn('role', [User::ROLE_STUDENT, User::ROLE_ALUMNI])
+            ->where(function ($inner) use ($query) {
+                $inner->where('name', 'like', "%{$query}%")
+                    ->orWhere('first_name', 'like', "%{$query}%")
+                    ->orWhere('last_name', 'like', "%{$query}%")
+                    ->orWhere('student_id', 'like', "%{$query}%");
+            })
+            ->orderBy('name')
+            ->limit($limit)
+            ->get()
+            ->map(fn (User $person) => [
+                'id'              => $person->id,
+                'name'            => $person->name,
+                'course'          => $person->course,
+                'student_id'      => $person->student_id,
+                'profile_picture' => $person->profile_picture,
+            ]);
+
+        return response()->json(['data' => $users]);
     }
 
     
@@ -286,7 +355,9 @@ class ProfileController extends Controller
             $addedIds    = array_values(array_diff($newIds, $existingIds));
 
             TaggedPhoto::where('photo_id', $photo->id)->where('source', 'manual')->delete();
-            $this->tagUsersAndNotify($photo, $newIds, Auth::user(), $addedIds);
+            $photo->taggedUsers()->detach();
+            $this->saveTags($photo, $newIds, Auth::user());
+            $this->notifyTaggedUsers($photo, $addedIds, Auth::user());
         }
 
         $photo->load([
@@ -378,22 +449,32 @@ class ProfileController extends Controller
     // DELETE /api/profile/posts/{photoId}
     public function deletePost(int $photoId): JsonResponse
     {
-        $photo = Photo::where('id', $photoId)
+        $photo = Photo::query()
+            ->where('id', $photoId)
             ->where('user_id', Auth::id())
-            ->where('is_profile_post', true)
             ->with('media')
-            ->firstOrFail();
+            ->first();
+
+        if (! $photo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Post not found.',
+            ], 404);
+        }
 
         foreach ($photo->media as $media) {
+            if (! $media->public_id) {
+                continue;
+            }
             try {
                 $this->storage->deletePhoto(
                     publicId:     $media->public_id,
-                    resourceType: $media->resource_type,
+                    resourceType: $media->resource_type ?: 'image',
                 );
             } catch (\Throwable) {}
         }
 
-        if ($photo->public_id && $photo->media->isEmpty()) {
+        if ($photo->public_id) {
             try {
                 $this->storage->deletePhoto(
                     publicId:     $photo->public_id,
@@ -402,8 +483,12 @@ class ProfileController extends Controller
             } catch (\Throwable) {}
         }
 
-        TaggedPhoto::where('photo_id', $photo->id)->delete();
-        $photo->delete();
+        DB::transaction(function () use ($photo) {
+            TaggedPhoto::where('photo_id', $photo->id)->delete();
+            $photo->taggedUsers()->detach();
+            $photo->media()->delete();
+            $photo->forceDelete();
+        });
 
         return response()->json(['success' => true, 'message' => 'Post deleted.']);
     }
@@ -411,6 +496,10 @@ class ProfileController extends Controller
     // PRIVATE HELPERS
     private function formatPost(Photo $photo): array
     {
+        if (! array_key_exists('unique_views_count', $photo->getAttributes())) {
+            $photo->loadCount('postViews as unique_views_count');
+        }
+
         $media = $photo->relationLoaded('media') ? $photo->media : $photo->media()->get();
 
         // Backward compat: old posts have no PostMedia rows use file_path directly
@@ -423,12 +512,17 @@ class ProfileController extends Controller
             ]]);
         }
 
-        $taggedStudents = $photo->relationLoaded('taggedStudents')
+        $fromPivot = $photo->relationLoaded('taggedUsers')
+            ? $photo->taggedUsers
+            : $photo->taggedUsers()->get();
+        $fromLegacy = $photo->relationLoaded('taggedStudents')
             ? $photo->taggedStudents
             : collect();
+        $taggedStudents = $fromPivot->concat($fromLegacy)->unique('id')->values();
 
         return [
             'id'              => $photo->id,
+            'views_count'     => (int) ($photo->unique_views_count ?? $photo->views_count ?? 0),
             'caption'         => $photo->caption,
             'visibility'      => $this->displayVisibility($photo->visibility),
             'created_at'      => $photo->created_at,
@@ -457,38 +551,102 @@ class ProfileController extends Controller
         ];
     }
 
-    private function tagUsersAndNotify(
-        Photo  $photo,
-        array  $userIds,
-        User   $tagger,
-        ?array $notifyIds = null
-    ): void {
-        $notifyIds  = $notifyIds ?? $userIds;
-        $photoUrl   = $photo->media()->orderBy('sort_order')->value('file_path')
-                      ?? $photo->file_path
-                      ?? '';
+    private function tagIdsFromRequest(Request $request, int $viewerId): array
+    {
+        $ids = array_merge(
+            array_map('intval', (array) $request->input('tagged_user_ids', [])),
+            array_map('intval', (array) $request->input('tagged_users', [])),
+        );
 
-        foreach ($userIds as $userId) {
-            if ($userId === $tagger->id) continue;
+        return array_values(array_unique(array_filter(
+            $ids,
+            fn (int $id) => $id > 0 && $id !== $viewerId
+        )));
+    }
 
-            TaggedPhoto::create([
-                'photo_id'   => $photo->id,
-                'user_id'    => $userId,
-                'tagged_by'  => $tagger->id,
-                'source'     => 'manual',
-                'similarity' => 100,
-                'confidence' => 100,
-                'status'     => 'approved',
+    private function storeUpload(\Illuminate\Http\UploadedFile $file, int $userId): array
+    {
+        $options = [
+            'skip_mime_check' => true,
+            'skip_size_check' => true,
+        ];
+
+        try {
+            return $this->storage->uploadPhoto(
+                file: $file,
+                userId: $userId,
+                folder: 'profile',
+                options: $options,
+            );
+        } catch (\Throwable $e) {
+            if (! app()->environment('local')) {
+                throw $e;
+            }
+
+            Log::warning('Profile upload fell back to the local public disk', [
+                'user_id' => $userId,
+                'error'   => $e->getMessage(),
             ]);
 
-            if (in_array($userId, $notifyIds)) {
-                $taggedUser = User::find($userId);
-                if ($taggedUser) {
-                    try {
-                        $actionUrl = rtrim(config('app.frontend_url'), '/') . '/profile/' . $photo->user_id . '?post=' . $photo->id;
-                        PhotoTaggedNotification::dispatchFor($taggedUser, $tagger, $photoUrl, $actionUrl, $photo->id, $photo->user_id);
-                    } catch (\Throwable) {}
-                }
+            return app(LocalStorageService::class)->uploadPhoto($file, $userId, 'profile', $options);
+        }
+    }
+
+    private function saveTags(Photo $photo, array $userIds, User $tagger): void
+    {
+        $attach = [];
+        foreach ($userIds as $userId) {
+            if ((int) $userId === (int) $tagger->id) {
+                continue;
+            }
+
+            $attach[(int) $userId] = ['tagged_by' => $tagger->id];
+
+            TaggedPhoto::firstOrCreate(
+                [
+                    'photo_id' => $photo->id,
+                    'user_id'  => $userId,
+                    'source'   => 'manual',
+                ],
+                [
+                    'tagged_by'  => $tagger->id,
+                    'similarity' => 100,
+                    'confidence' => 100,
+                    'status'     => 'approved',
+                ]
+            );
+        }
+
+        if ($attach !== []) {
+            $photo->taggedUsers()->syncWithoutDetaching($attach);
+        }
+    }
+
+    private function notifyTaggedUsers(Photo $photo, array $userIds, User $tagger): void
+    {
+        $photoUrl = $photo->media()->orderBy('sort_order')->value('file_path')
+            ?? $photo->file_path
+            ?? '';
+
+        foreach ($userIds as $userId) {
+            if ((int) $userId === (int) $tagger->id) {
+                continue;
+            }
+
+            $taggedUser = User::find($userId);
+            if (! $taggedUser || ! $photo->visibleTo($taggedUser)) {
+                continue;
+            }
+
+            try {
+                $actionUrl = rtrim((string) config('app.frontend_url'), '/') . '/profile/' . $photo->user_id . '?post=' . $photo->id;
+                PhotoTaggedNotification::dispatchFor($taggedUser, $tagger, $photoUrl, $actionUrl, $photo->id, $photo->user_id);
+            } catch (\Throwable $e) {
+                Log::warning('Photo tag notification failed', [
+                    'photo_id' => $photo->id,
+                    'user_id'  => $userId,
+                    'message'  => $e->getMessage(),
+                ]);
             }
         }
     }
@@ -503,28 +661,4 @@ class ProfileController extends Controller
         return $visibility === 'friends' ? 'batchmates' : ($visibility ?: 'public');
     }
 
-    private function areBatchmates(User $viewer, User $profileOwner): bool
-    {
-        $viewer->loadMissing('studentRecord');
-        $profileOwner->loadMissing('studentRecord');
-
-        $viewerYear = $viewer->graduation_year;
-        $ownerYear  = $profileOwner->graduation_year;
-
-        if (! $viewerYear || ! $ownerYear || (int) $viewerYear !== (int) $ownerYear) {
-            return false;
-        }
-
-        $viewerSection = $viewer->section_id ?: $viewer->studentRecord?->section_id;
-        $ownerSection  = $profileOwner->section_id ?: $profileOwner->studentRecord?->section_id;
-
-        if ($viewerSection && $ownerSection && (int) $viewerSection === (int) $ownerSection) {
-            return true;
-        }
-
-        $viewerCourse = trim((string) $viewer->course);
-        $ownerCourse  = trim((string) $profileOwner->course);
-
-        return $viewerCourse !== '' && $ownerCourse !== '' && strcasecmp($viewerCourse, $ownerCourse) === 0;
-    }
 }

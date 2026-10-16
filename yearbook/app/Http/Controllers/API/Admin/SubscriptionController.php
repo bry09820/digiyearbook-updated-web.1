@@ -10,32 +10,26 @@ use Illuminate\Support\Facades\DB;
 
 class SubscriptionController extends Controller
 {
-    // Plan keys that exist in the DB (set by PaymentController)
-    private const PREMIUM_PLANS  = ['premium_monthly', 'premium_yearly'];
-    private const STANDARD_PLANS = ['standard_monthly', 'standard_yearly'];
-
     // GET /api/admin/subscriptions/stats
     public function stats(): JsonResponse
     {
-        $activeCount = Subscription::where('status', 'active')
-            ->where(fn ($q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))
-            ->count();
+        $active = Subscription::query()->withActiveStatus();
+        $tiers = \App\Models\User::subscriptionTierCensus();
 
         return response()->json([
-            'active_count'    => $activeCount,
+            'active_count'    => $tiers['premium_standard'] + $tiers['premium'],
+            'total_users'     => $tiers['total_users'],
             'cancelled_count' => Subscription::where('status', 'cancelled')->count(),
-            'total_revenue'   => Subscription::where('status', 'active')->sum('amount_paid'),
-            'expiring_soon'   => Subscription::where('status', 'active')
+            'total_revenue'   => (clone $active)->sum('amount_paid'),
+            'expiring_soon'   => (clone $active)
                 ->whereBetween('expires_at', [now(), now()->addDays(30)])
                 ->count(),
             'tiers' => [
-                // free = no subscription row or expired
-                'free'             => \App\Models\User::whereDoesntHave('subscriptions', fn ($q) =>
-                                        $q->where('status', 'active')
-                                          ->where(fn ($q2) => $q2->whereNull('expires_at')->orWhere('expires_at', '>', now()))
-                                      )->where('role', 'student')->count(),
-                'premium_standard' => Subscription::whereIn('plan', self::STANDARD_PLANS)->where('status', 'active')->count(),
-                'premium'          => Subscription::whereIn('plan', self::PREMIUM_PLANS)->where('status', 'active')->count(),
+                'free'             => $tiers['free'],
+                'premium_standard' => $tiers['premium_standard'],
+                'premium'          => $tiers['premium'],
+                'faculty'          => $tiers['faculty'],
+                'admin'            => $tiers['admin'],
             ],
         ]);
     }
@@ -57,9 +51,9 @@ class SubscriptionController extends Controller
         // Filter by plan group: 'standard' or 'premium'
         if ($plan = $request->get('plan')) {
             if ($plan === 'premium') {
-                $query->whereIn('plan', self::PREMIUM_PLANS);
+                $query->premiumTier();
             } elseif ($plan === 'standard') {
-                $query->whereIn('plan', self::STANDARD_PLANS);
+                $query->standardTier();
             }
         }
 

@@ -105,7 +105,7 @@ export function AppConfigProvider({ children }) {
   useEffect(() => {
     isMounted.current = true;
     refresh();
-    const id = setInterval(refresh, 5 * 60 * 1000);
+    const id = setInterval(refresh, 8000);
     return () => {
       isMounted.current = false;
       clearInterval(id);

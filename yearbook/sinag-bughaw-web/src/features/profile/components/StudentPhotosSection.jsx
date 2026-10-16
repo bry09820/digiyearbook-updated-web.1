@@ -222,7 +222,7 @@ export default function StudentPhotosSection({ userId, compact = false, openInMo
       <div className="flex items-center justify-between mb-6">
         <h3 className="flex items-center gap-2.5 font-black text-xl text-[#1d2b4b] m-0">
           <i className="fas fa-user-tag text-[#fdb813]" />
-          Tagged in Gallery
+          Tagged in
           {meta && (
             <span className="text-xs font-bold text-white bg-[#3f51b5] rounded-full px-2.5 py-1">
               {meta.total}

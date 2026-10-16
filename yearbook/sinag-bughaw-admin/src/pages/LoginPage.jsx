@@ -335,21 +335,27 @@ export default function LoginPage() {
         ) : (
           <>
             {/* Left */}
-            <LeftPanel desc="Open your Google Authenticator app and enter the 6-digit code shown for this account." />
+            <LeftPanel desc={setup
+              ? "Scan the QR code with Google Authenticator, or type the secret key. Then enter the 6-digit code the app shows."
+              : "Open your Google Authenticator app and enter the 6-digit code shown for this account."} />
 
             {/* Right: TOTP */}
             <div style={{
               flex: 1, background: "#fff",
               display: "flex", flexDirection: "column", justifyContent: "center",
-              padding: "52px 52px",
+              padding: "40px 48px",
+              maxHeight: "100vh",
+              overflowY: "auto",
             }}>
               <StepPill step="Step 2 of 2" />
 
               <h1 style={{ fontSize: 26, fontWeight: 700, color: "#0F172A", letterSpacing: "-0.4px", margin: "0 0 6px" }}>
-                Two-Factor Auth
+                {setup ? "Set up Authenticator" : "Two-Factor Auth"}
               </h1>
-              <p style={{ fontSize: 14, color: "#64748B", lineHeight: 1.6, margin: "0 0 32px" }}>
-                Enter the 6-digit code from your Google Authenticator app.
+              <p style={{ fontSize: 14, color: "#64748B", lineHeight: 1.6, margin: "0 0 24px" }}>
+                {setup
+                  ? "Scan this QR code in Google Authenticator. You can also enter the secret key by hand."
+                  : "Enter the 6-digit code from your Google Authenticator app."}
               </p>
 
               <ErrorBox />
@@ -359,18 +365,21 @@ export default function LoginPage() {
                   marginBottom: 24, borderRadius: 14, padding: 16,
                   background: "#EFF6FF", border: "1px solid #BFDBFE",
                 }}>
-                  <p style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 12 }}>
-                    Set up Google Authenticator
-                  </p>
-                  <img src={setup.qr_code_url} alt="QR code" style={{
-                    display: "block", margin: "0 auto 12px", width: 144, height: 144,
-                    borderRadius: 10, border: "1px solid #BFDBFE", background: "#fff", padding: 8,
+                  <img src={setup.qr_code_url} alt="Google Authenticator QR code" style={{
+                    display: "block", margin: "0 auto 14px", width: 220, height: 220,
+                    borderRadius: 12, border: "1px solid #BFDBFE", background: "#fff", padding: 8,
                   }} />
-                  <p style={{ fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 6 }}>Manual key</p>
+                  <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1E3A8A", margin: "0 0 6px" }}>
+                    Secret key
+                  </p>
                   <code style={{
                     display: "block", wordBreak: "break-all", background: "#fff",
-                    borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "#1E3A8A",
+                    borderRadius: 8, padding: "10px 12px", fontSize: 14, fontWeight: 700, color: "#1E3A8A",
+                    letterSpacing: "0.04em",
                   }}>{setup.secret}</code>
+                  <p style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5, margin: "10px 0 0" }}>
+                    Account: {setup.issuer}:{setup.account}
+                  </p>
                 </div>
               )}
 

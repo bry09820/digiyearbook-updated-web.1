@@ -6,6 +6,7 @@ import { useState, useRef, useEffect } from 'react';
 import { messagesApi }                 from '@/api/messaging.api';
 import { useAppConfig }                from '@/features/platform/AppConfigProvider';
 import { getSubscriptionTier }         from '@/utils/subscription';
+import { academicStatusLabel, isAlumniAccount } from '@/utils/academicStatus';
 
 // tier helper (shared logic)
 const getTier = (user) => getSubscriptionTier(user);
@@ -112,6 +113,7 @@ export default function Navbar() {
 
   const navLinks = NAV_LINKS.filter((link) => {
     if (link.to === '/directory') return isOn('enable_student_directory_search');
+    if (link.to === '/alumni') return isAlumniAccount(user);
     return true;
   });
 
@@ -222,7 +224,9 @@ export default function Navbar() {
               {/* Name + tier hidden on small screens */}
               <div className="hidden sm:flex flex-col gap-0.5 text-left">
                 <span className="text-white text-[13px] font-semibold leading-none">{firstName}</span>
-                <TierBadge tier={userTier} />
+                <span className="text-[9px] font-bold uppercase tracking-wide text-[#fdb813] leading-none">
+                  {academicStatusLabel(user)}
+                </span>
               </div>
 
               <i
@@ -259,6 +263,9 @@ export default function Navbar() {
                         )}
                       </div>
                       <p className="text-[11px] text-slate-400 m-0 truncate">{user?.email}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-[#3f51b5] m-0 mt-1">
+                        {academicStatusLabel(user)}
+                      </p>
                     </div>
                   </div>
                 </div>

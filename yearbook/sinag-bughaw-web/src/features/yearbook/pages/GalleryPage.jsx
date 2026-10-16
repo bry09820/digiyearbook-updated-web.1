@@ -14,6 +14,7 @@ import ProtectedImage from '@/components/ui/ProtectedImage';
 import { ContentOwnershipBanner } from '@/components/ui/CopyrightLabel';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 import { getSubscriptionTier } from '@/utils/subscription';
+import { pageCacheKey, readPageCache, writePageCache } from '@/utils/pageCache';
 
 // Helpers
 // All API calls now go through the axios client which handles auth automatically.
@@ -100,7 +101,7 @@ const albumMediaTitle = (media, fallback = 'Media') => media?.title
   ?? fallback;
 const isApprovedMedia = (item) => {
   const status = String(item?.status || item?.moderation_status || item?.approval_status || item?.pivot?.status || '').toLowerCase();
-  if (['rejected', 'denied', 'declined', 'pending', 'unapproved', 'hidden'].includes(status)) return false;
+  if (['rejected', 'denied', 'declined', 'unapproved', 'hidden'].includes(status)) return false;
   if (item?.is_approved === false || item?.approved === false || item?.is_public === false) return false;
   return status ? ['approved', 'published', 'active', 'public'].includes(status) : true;
 };
@@ -768,6 +769,11 @@ function AlbumPhotoGrid({ album, label, onBack, currentUser, onDeletePhoto }) {
                     imgStyle={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
                   )}
+                  {String(photo?.status || '').toLowerCase() === 'pending' && (
+                    <div className="absolute bottom-3 left-3 rounded-lg bg-[#1d2b4b]/85 px-2 py-1 text-[10px] font-extrabold uppercase tracking-wide text-[#fdb813]">
+                      Pending approval
+                    </div>
+                  )}
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                     <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/20 backdrop-blur-sm">
                       <i className={`fas ${isVideo ? 'fa-play' : 'fa-expand'} text-base text-white`} />
@@ -1353,8 +1359,9 @@ export default function GalleryPage() {
   const canUpload = user?.role === 'admin' || user?.is_admin || isPremium;
 
   const [activeTab,     setActiveTab]     = useState('general');
-  const [albums,        setAlbums]        = useState([]);
-  const [loading,       setLoading]       = useState(true);
+  const cachedGallery = readPageCache(pageCacheKey(['gallery', 'general']));
+  const [albums,        setAlbums]        = useState(cachedGallery ?? []);
+  const [loading,       setLoading]       = useState(!cachedGallery);
   const [searching,     setSearching]     = useState(false);
   const [searchQuery,   setSearchQuery]   = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -1372,15 +1379,12 @@ export default function GalleryPage() {
   const [uploadVisibility, setUploadVisibility] = useState('public');
   const [deletePhotoTarget, setDeletePhotoTarget] = useState(null);
   const [deletePhotoLoading, setDeletePhotoLoading] = useState(false);
+  const afterUploadRef = useRef(null);
 
   const isGrad = activeTab !== 'general';
   const tier   = storage.tier;
 
-  const uploadHook = useMediaUpload(activeAlbum, tier, () => {
-    setUploadStep(null);
-    loadAlbums();
-    reloadStorage();
-  });
+  const uploadHook = useMediaUpload(activeAlbum, tier, () => afterUploadRef.current?.());
 
   const bulkUploadProps = {
     queue:       uploadHook.files,
@@ -1438,12 +1442,19 @@ export default function GalleryPage() {
   };
 
   const loadAlbums = (tab = activeTab) => {
-    setLoading(true);
+    const cacheKey = pageCacheKey(['gallery', tab]);
+    const cached = readPageCache(cacheKey);
+    if (cached) setAlbums(cached);
+    else setLoading(true);
     fetchAlbumsForTab(tab)
       .then(async list => {
-        setAlbums(await hydrateAlbumCovers(list, tab));
+        const hydrated = await hydrateAlbumCovers(list, tab);
+        writePageCache(cacheKey, hydrated);
+        setAlbums(hydrated);
       })
-      .catch(() => setAlbums([]))
+      .catch(() => {
+        if (!cached) setAlbums([]);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -1515,6 +1526,17 @@ export default function GalleryPage() {
       isGeneral ? setSelectedGalleryAlbum(merged) : setSelectedGradAlbum(merged);
     } catch {
       // Keep the album card payload visible if the detail request fails.
+    }
+  };
+
+  afterUploadRef.current = () => {
+    const albumId = activeAlbum;
+    const known = albums.find(album => String(album.id) === String(albumId));
+    setUploadStep(null);
+    loadAlbums();
+    reloadStorage();
+    if (albumId) {
+      openInlineAlbum(known ?? { id: albumId, title: 'Album' }, 'general');
     }
   };
 
@@ -1947,7 +1969,7 @@ export default function GalleryPage() {
               ))}
             </div>
           )
-        ) : loading ? (
+        ) : loading && albums.length === 0 ? (
           <LoadingSkeleton variant="card" count={6} />
         ) : albums.length === 0 ? (
           <div className="text-center py-20 px-5 bg-white rounded-3xl shadow-sm border border-slate-100">

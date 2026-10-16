@@ -12,16 +12,16 @@ import SubscriptionGate from '@/features/subscription/components/SubscriptionGat
 import StudentPhotosSection from '../components/StudentPhotosSection';
 import PostLightbox from '../components/PostLightbox';
 import PostContextMenu from '../components/PostContextMenu';
-import VoiceNotesSection from '@/features/messaging/components/VoiceNotesSection';
 import { imageUrl, avatarUrl as makeAvatar } from '@/utils/imageUrl';
 import { recordProfileView } from '@/api/analytics.api';
 import { trackProfileView } from '@/utils/ga4';
 import { getCourseShort } from '@/utils/courseShort';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 import { hasPaidAccess } from '@/utils/subscription';
+import { academicStatusLabel, isAlumniAccount } from '@/utils/academicStatus';
 
 // Helpers
-const isGraduate = (student) => !!student?.graduation_year;
+const isGraduate = (student) => isAlumniAccount(student);
 const isMeaningfulText = (value, minLength = 3) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   const compact = text.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -68,12 +68,7 @@ const buildMessageTarget = (person, { routeId = null, allowFallbackId = true } =
   };
 };
 
-const academicStatusFor = (student) => {
-  if (!student) return 'N/A';
-  if (student.status || student.academic_status) return student.status || student.academic_status;
-  if (isGraduate(student) || student.role === 'alumni') return 'Alumni';
-  return 'Enrolled';
-};
+const academicStatusFor = (student) => academicStatusLabel(student);
 
 const yearLevelLabel = (student) => {
   if (!student?.year_level) return 'N/A';
@@ -134,6 +129,11 @@ function initialsFor(name = '') {
     .join('') || 'NU';
 }
 
+const displayText = (value) => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return String(value);
+  return '';
+};
 const pickFirst = (...values) => values.find(value => value !== undefined && value !== null && String(value).trim() !== '');
 const publicStudentField = (student, ...keys) => {
   const sources = [
@@ -289,14 +289,24 @@ function RestrictedProfileView({ student, visibility, authUser, onBack, onLogin,
             <i className="fas fa-users text-xl" />
           </div>
           <h2 className="m-0 text-[18px] font-semibold text-[#1d2b4b]">
-            {isSubscriptionLimited ? 'Profile details locked' : 'This profile is private'}
+            {isSubscriptionLimited
+              ? 'Profile details locked'
+              : isUnregistered
+                ? 'Profile unavailable'
+                : isBatchmatesOnly
+                  ? 'This profile is for batchmates only'
+                  : 'This profile is private'}
           </h2>
           <p className="mx-auto mt-3 mb-0 max-w-[330px] text-sm leading-relaxed text-slate-500">
             {isSubscriptionLimited
               ? 'Full profile details are hidden on free tier. Upgrade to unlock the complete profile, gallery access, and contact details.'
-              : !loggedIn
-              ? 'Only students from the same batch can view the full profile. Sign in with your NU Lipa student account to check access.'
-              : `You're not in the same batch as ${name}. Only their batchmates can view this profile.`}
+              : isUnregistered
+                ? 'This student record is not available for a full profile view.'
+                : isBatchmatesOnly
+                  ? (!loggedIn
+                    ? 'Only students from the same batch year can view the full profile. Sign in with your NU Lipa student account to check access.'
+                    : `You and ${name} are not in the same batch year. Only students from that graduation year can view this profile.`)
+                  : 'Only the owner can view this profile. Posts, achievements, and other details stay hidden.'}
           </p>
           <div className="mt-6 flex flex-col gap-3">
             {!loggedIn && (
@@ -355,7 +365,6 @@ export default function StudentProfileView() {
       : []),
     { key: 'academic',     icon: 'fas fa-graduation-cap', label: 'Academic'       },
     { key: 'achievements', icon: 'fas fa-award',          label: 'Achievements'   },
-    { key: 'voice',        icon: 'fas fa-microphone',     label: 'Voice Memories' },
   ];
 
   // Fetch student + record view
@@ -366,25 +375,34 @@ export default function StudentProfileView() {
       return;
     }
     setLoading(true);
+    setStudent(null);
+    setRestrictedStudent(null);
     studentsApi.show(id)
       .then(({ data }) => {
+        const payload = data?.data && !data?.name && !data?.restricted ? data.data : data;
         // HTTP 200 restricted envelopes (unregistered / unavailable / subscription soft gate)
-        if (data?.restricted || RESTRICTED_VISIBILITIES.includes(data?.visibility)) {
+        if (payload?.restricted || RESTRICTED_VISIBILITIES.includes(payload?.visibility)) {
           setStudent(null);
-          setRestrictedStudent(data.student ?? data);
-          setVisibility(data.visibility ?? 'unavailable');
+          setRestrictedStudent(payload.student ?? payload);
+          setVisibility(payload.visibility ?? 'unavailable');
           return;
         }
-        setStudent(data);
+        const resolvedId = payload?.user_id ?? payload?.account_user_id ?? payload?.id;
+        if (resolvedId != null && String(resolvedId) !== String(id) && String(payload?.id) !== String(id)) {
+          setStudent(null);
+          setVisibility(null);
+          return;
+        }
+        setStudent(payload);
         setRestrictedStudent(null);
         setVisibility(null);
         // id here is users.id correct for profile_views table
         recordProfileView(parseInt(id));
         trackProfileView({
           id:     parseInt(id),
-          name:   data.name   ?? '',
-          course: data.course ?? '',
-          batch:  data.graduation_year ?? '',
+          name:   payload.name   ?? '',
+          course: payload.course ?? '',
+          batch:  payload.graduation_year ?? '',
         });
       })
       .catch(err => {
@@ -422,7 +440,14 @@ export default function StudentProfileView() {
         if (data.restricted) { setPostsRestricted(true); setPosts([]); }
         else { setPostsRestricted(false); setPosts((data.data?.data ?? data.data ?? []).filter(shouldShowProfilePost)); }
       })
-      .catch(() => {})
+      .catch((err) => {
+        const denied = err.response?.status === 403
+          || ['private', 'batchmates', 'alumni_only'].includes(err.response?.data?.visibility);
+        if (denied) {
+          setPostsRestricted(true);
+          setPosts([]);
+        }
+      })
       .finally(() => setPostsLoading(false));
   };
 
@@ -462,7 +487,7 @@ export default function StudentProfileView() {
     openChat(messageTarget || student);
   };
 
-  const handlePostDeleted = (pid) => { setPosts(p => p.filter(x => x.id !== pid)); showToastMsg('Post deleted.', 'error'); setContextMenu(null); };
+  const handlePostDeleted = (pid) => { setPosts(p => p.filter(x => String(x.id) !== String(pid))); showToastMsg('Post deleted.', 'error'); setContextMenu(null); };
   const handlePostUpdated = (u)   => { setPosts(p => p.map(x => x.id === u.id ? { ...x, ...u } : x)); showToastMsg('Updated!'); setContextMenu(null); };
   const handleReportPost = async (post) => {
     try {
@@ -522,7 +547,7 @@ export default function StudentProfileView() {
       </h2>
       <p className="text-sm text-slate-400 m-0">
         {visibility === 'private'     ? 'The student has restricted access to their profile.' : ''}
-        {visibility === 'batchmates'  ? 'Only students from the same batch can view it.'     : ''}
+        {visibility === 'batchmates'  ? 'Only students from the same batch year can view it.' : ''}
       </p>
       <button onClick={() => navigate('/directory')}
         className="bg-transparent border-none text-[#3f51b5] text-sm font-semibold cursor-pointer">
@@ -546,7 +571,15 @@ export default function StudentProfileView() {
           onClose={() => setContextMenu(null)} onDelete={handlePostDeleted} onUpdated={handlePostUpdated} />
       )}
 
-      {lightbox && <PostLightbox post={lightbox} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <PostLightbox
+          post={lightbox}
+          onClose={() => setLightbox(null)}
+          onViewCount={(postId, viewsCount) => {
+            setPosts(prev => prev.map(item => item.id === postId ? { ...item, views_count: viewsCount } : item));
+          }}
+        />
+      )}
 
       {/* Toast */}
       {toast && (
@@ -609,14 +642,19 @@ export default function StudentProfileView() {
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <h1 className="text-xl font-black text-[#1d2b4b] m-0 leading-none">{student.name}</h1>
               {student.is_premium && <PremiumBadge size="sm" />}
-              {graduate && canViewFull && (
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full tracking-wide flex items-center gap-1">
-                  <i className="fas fa-graduation-cap text-[8px]" /> GRADUATE {batchYear}
+              {canViewFull && (
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full tracking-wide flex items-center gap-1 ${
+                  graduate
+                    ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                    : 'text-[#3f51b5] bg-indigo-50 border border-indigo-100'
+                }`}>
+                  <i className={`fas ${graduate ? 'fa-user-graduate' : 'fa-user'} text-[8px]`} />
+                  {graduate ? 'Alumni' : 'Current Student'}
                 </span>
               )}
-              {canViewFull && !graduate && (
-                <span className="text-[10px] font-bold text-[#3f51b5] bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full tracking-wide">
-                  PIONEER {batchYear}
+              {canViewFull && batchYear && (
+                <span className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full tracking-wide flex items-center gap-1">
+                  <i className="fas fa-graduation-cap text-[8px]" /> Class of {batchYear}
                 </span>
               )}
             </div>
@@ -739,9 +777,11 @@ export default function StudentProfileView() {
                       ? <video src={post.file_path} className="w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105" muted />
                       : <img   src={post.file_path} alt={post.caption ?? ''} className="w-full h-full object-cover block transition-transform duration-300 group-hover:scale-105" />
                     }
-                    <div className="absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200 group-hover:opacity-100 flex items-center justify-center gap-5">
-                      <span className="text-white text-sm font-bold"><i className="fas fa-heart text-[#fdb813] mr-1" />0</span>
-                      <span className="text-white text-sm font-bold"><i className="fas fa-comment text-[#fdb813] mr-1" />0</span>
+                    <div className="absolute inset-0 bg-[#1d2b4b]/55 opacity-0 transition-opacity duration-200 group-hover:opacity-100 flex items-center justify-center">
+                      <span className="text-white text-sm font-bold">
+                        <i className="fas fa-eye text-[#fdb813] mr-1" aria-hidden="true" />
+                        {Number(post.views_count ?? post.views ?? 0).toLocaleString()}
+                      </span>
                     </div>
                     <button
                       type="button"
@@ -807,10 +847,10 @@ export default function StudentProfileView() {
                 </div>
                 <div>
                   <p className="text-sm font-black text-emerald-800 m-0">
-                    {student.honors ? `${student.honors} Graduate` : 'Graduate'} · Class of {batchYear}
+                    {displayText(student.honors) ? `${displayText(student.honors)} Graduate` : 'Graduate'} · Class of {batchYear}
                   </p>
                   <p className="text-xs text-emerald-600 m-0 mt-0.5">
-                    {student.course} · National University Lipa
+                    {displayText(student.course) || 'Student'} · National University Lipa
                   </p>
                 </div>
               </div>
@@ -831,24 +871,24 @@ export default function StudentProfileView() {
               )}
 
               {/* Honors & Organizations */}
-              {(student.honors || student.organizations || student.achievements) && (
+              {(displayText(student.honors) || displayText(student.organizations) || displayText(student.achievements)) && (
                 <ViewCard icon="fas fa-medal" label="Honors & Organizations">
-                  {student.honors && (
-                    <div className={`${student.organizations || student.achievements ? 'mb-3 pb-3 border-b border-slate-100' : ''}`}>
+                  {displayText(student.honors) && (
+                    <div className={`${displayText(student.organizations) || displayText(student.achievements) ? 'mb-3 pb-3 border-b border-slate-100' : ''}`}>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Honors</p>
-                      <p className="text-sm font-semibold text-[#1d2b4b] m-0">{student.honors}</p>
+                      <p className="text-sm font-semibold text-[#1d2b4b] m-0">{displayText(student.honors)}</p>
                     </div>
                   )}
-                  {student.organizations && (
-                    <div className={student.achievements ? 'mb-3 pb-3 border-b border-slate-100' : ''}>
+                  {displayText(student.organizations) && (
+                    <div className={displayText(student.achievements) ? 'mb-3 pb-3 border-b border-slate-100' : ''}>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Organizations</p>
-                      <p className="text-sm text-slate-600 m-0 leading-relaxed">{student.organizations}</p>
+                      <p className="text-sm text-slate-600 m-0 leading-relaxed">{displayText(student.organizations)}</p>
                     </div>
                   )}
-                  {student.achievements && (
+                  {displayText(student.achievements) && (
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Achievements</p>
-                      <p className="text-sm text-slate-600 m-0 leading-relaxed">{student.achievements}</p>
+                      <p className="text-sm text-slate-600 m-0 leading-relaxed">{displayText(student.achievements)}</p>
                     </div>
                   )}
                 </ViewCard>
@@ -862,14 +902,14 @@ export default function StudentProfileView() {
                     { label: 'Future Plans',   icon: 'fa-map',     value: student.future_plans   },
                     { label: 'Fondest Memory', icon: 'fa-heart',   value: student.fondest_memory },
                     { label: 'Most Likely To', icon: 'fa-trophy',  value: student.most_likely_to },
-                  ].filter(r => r.value).map((row, i, arr) => (
+                  ].filter(r => displayText(r.value)).map((row, i, arr) => (
                     <div key={row.label} className={`pb-3 mb-3 ${i < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
                       <div className="flex items-center gap-1.5 mb-1">
                         <i className={`fas ${row.icon} text-[#fdb813] text-[10px]`} />
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider m-0">{row.label}</p>
                       </div>
                       <p className="text-sm text-slate-600 italic m-0 leading-relaxed pl-3 border-l-2 border-amber-200">
-                        "{row.value}"
+                        "{displayText(row.value)}"
                       </p>
                     </div>
                   ))}
@@ -877,27 +917,27 @@ export default function StudentProfileView() {
               )}
 
               {/* Messages */}
-              {(student.message_to_batchmates || student.message_to_parents) && (
+              {(displayText(student.message_to_batchmates) || displayText(student.message_to_parents)) && (
                 <ViewCard icon="fas fa-envelope-open-text" label="Messages">
-                  {student.message_to_batchmates && (
+                  {displayText(student.message_to_batchmates) && (
                     <div className={student.message_to_parents ? 'mb-3 pb-3 border-b border-slate-100' : ''}>
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <i className="fas fa-users text-[#fdb813] text-[10px]" />
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider m-0">To My Batchmates</p>
                       </div>
                       <p className="text-sm text-slate-600 italic m-0 leading-relaxed pl-3 border-l-2 border-indigo-200">
-                        "{student.message_to_batchmates}"
+                        "{displayText(student.message_to_batchmates)}"
                       </p>
                     </div>
                   )}
-                  {student.message_to_parents && (
+                  {displayText(student.message_to_parents) && (
                     <div>
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <i className="fas fa-house-heart text-[#fdb813] text-[10px]" />
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider m-0">To My Parents</p>
                       </div>
                       <p className="text-sm text-slate-600 italic m-0 leading-relaxed pl-3 border-l-2 border-rose-200">
-                        "{student.message_to_parents}"
+                        "{displayText(student.message_to_parents)}"
                       </p>
                     </div>
                   )}
@@ -945,10 +985,10 @@ export default function StudentProfileView() {
             <ViewCard icon="fas fa-graduation-cap" label="Academic Info">
               <div className="grid grid-cols-2 gap-3 mb-3">
                 {[
-                  { label: 'Course',     value: student.course || 'N/A',    icon: 'fa-book'          },
+                  { label: 'Course',     value: displayText(student.course) || 'Not listed', icon: 'fa-book'          },
                   { label: 'Year Level', value: yearLevelLabel(student),    icon: 'fa-layer-group'   },
                   { label: 'Status',     value: academicStatusFor(student), icon: academicStatusFor(student) === 'Alumni' ? 'fa-graduation-cap' : 'fa-circle-check', green: true },
-                  { label: 'Batch',      value: batchYear || 'N/A',         icon: 'fa-calendar'      },
+                  { label: 'Batch',      value: batchYear || 'Not listed',  icon: 'fa-calendar'      },
                 ].map(row => (
                   <div key={row.label} className="bg-slate-50 border border-slate-100 rounded-xl p-4">
                     <div className="flex items-center gap-1.5 mb-2">
@@ -1003,26 +1043,6 @@ export default function StudentProfileView() {
                   </div>
                 ))
               )}
-            </ViewCard>
-          </SubscriptionGate>
-        )}
-
-        {/* VOICE MEMORIES TAB */}
-        {activeTab === 'voice' && (
-          <SubscriptionGate isSubscribed={canViewFull} variant="full" message="Subscribe to listen to voice memories."
-            preview={
-              <div className="bg-white rounded-2xl p-6 space-y-4">
-                {[1,2,3].map(i => (
-                  <div key={i} className="flex items-center gap-3 py-3 border-b border-slate-100 last:border-0">
-                    <div className="w-10 h-10 rounded-full bg-slate-100 animate-pulse shrink-0" />
-                    <div className="flex-1 space-y-2"><SkeletonBlock w="60%" h={9} /><SkeletonBlock w="80%" h={7} /></div>
-                  </div>
-                ))}
-              </div>
-            }
-          >
-            <ViewCard icon="fas fa-microphone" label="Voice Memories">
-              <VoiceNotesSection profileUser={student} isOwnProfile={false} />
             </ViewCard>
           </SubscriptionGate>
         )}

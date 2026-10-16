@@ -27,9 +27,6 @@ export function usePhotoFacesBroadcast(onEvent, { photoIds = null, enabled = tru
     if (!enabled) return undefined;
 
     if (typeof window === 'undefined' || !window.Echo) {
-      if (import.meta.env.DEV) {
-        console.warn('[usePhotoFacesBroadcast] window.Echo is not available.');
-      }
       return undefined;
     }
 

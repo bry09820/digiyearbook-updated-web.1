@@ -73,7 +73,7 @@ class AdminAuthController extends Controller
         $challenge = Str::random(48);
         $cacheKey = "admin_totp_challenge:{$challenge}";
         $totpSecret = $this->encryptedAdminValue($admin, 'totp_secret');
-        $setupRequired = empty($totpSecret);
+        $setupRequired = empty($totpSecret) || $admin->totp_enabled_at === null;
 
         $setup = null;
         if ($setupRequired) {
@@ -82,20 +82,22 @@ class AdminAuthController extends Controller
             $this->clearUndecryptableAttribute($admin, 'totp_secret');
             $this->clearUndecryptableAttribute($admin, 'totp_pending_secret');
 
-            $secret = $this->encryptedAdminValue($admin, 'totp_pending_secret') ?: $this->totp->generateSecret();
-            $admin->forceFill(['totp_pending_secret' => $secret])->save();
+            $secret = $totpSecret
+                ?: $this->encryptedAdminValue($admin, 'totp_pending_secret')
+                ?: $this->totp->generateSecret();
+
+            if ($totpSecret === null || $totpSecret === '') {
+                $admin->forceFill(['totp_pending_secret' => $secret])->save();
+            }
+
+            $issuer = (string) config('app.name', 'Sinag-Bughaw');
+            $otpauthUrl = $this->totp->provisioningUri($issuer, $admin->username, $secret);
             $setup = [
-                'issuer' => config('app.name', 'Sinag-Bughaw'),
+                'issuer' => $issuer,
                 'account' => $admin->username,
                 'secret' => $secret,
-                'otpauth_url' => $this->totp->provisioningUri(
-                    config('app.name', 'Sinag-Bughaw'),
-                    $admin->username,
-                    $secret,
-                ),
-                'qr_code_url' => 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' . rawurlencode(
-                    $this->totp->provisioningUri(config('app.name', 'Sinag-Bughaw'), $admin->username, $secret)
-                ),
+                'otpauth_url' => $otpauthUrl,
+                'qr_code_url' => 'https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=' . rawurlencode($otpauthUrl),
             ];
         }
 
@@ -143,7 +145,8 @@ class AdminAuthController extends Controller
 
         $setupRequired = (bool) ($payload['setup_required'] ?? false);
         $secret = $setupRequired
-            ? $this->encryptedAdminValue($admin, 'totp_pending_secret')
+            ? ($this->encryptedAdminValue($admin, 'totp_pending_secret')
+                ?: $this->encryptedAdminValue($admin, 'totp_secret'))
             : $this->encryptedAdminValue($admin, 'totp_secret');
 
         if (! $secret || ! $this->totp->verify($secret, (string) $request->input('code'))) {

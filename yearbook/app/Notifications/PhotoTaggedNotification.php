@@ -42,7 +42,8 @@ class PhotoTaggedNotification extends Notification
         $taggerName = $tagger->name ?? 'Someone';
 
         // 1. In-app + FCM push notification
-        SendPushNotification::dispatch(
+        $send = app()->environment('local') ? 'dispatchSync' : 'dispatch';
+        SendPushNotification::$send(
             userId: $tagged->id,
             title:  '📸 You were tagged in a photo!',
             body:   "{$taggerName} tagged you in a photo.",

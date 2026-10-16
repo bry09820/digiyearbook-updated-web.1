@@ -1,16 +1,17 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/features/auth/hooks/useAuth';
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState } from 'react';
 import ConsentModal from '@/features/auth/components/ConsentModal';
 import { AppConfigProvider, useAppConfig } from '@/features/platform/AppConfigProvider';
 import FeatureRoute from '@/features/platform/FeatureRoute';
 import MaintenancePage from '@/pages/MaintenancePage';
 import AnnouncementsPage from '@/pages/AnnouncementsPage';
-import PrivacyScreen from '@/components/privacy/PrivacyScreen';
+import ScreenProtection from '@/components/privacy/ScreenProtection';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
 
 // Auth
 import LandingPage        from '@/pages/LandingPage';
+import TermsPage          from '@/pages/TermsPage';
 import LoginPage          from '@/features/auth/pages/LoginPage';
 import RegisterPage       from '@/features/auth/pages/RegisterPage';
 import SSOCallbackPage    from '@/features/auth/pages/SSOCallbackPage';
@@ -39,7 +40,6 @@ import DiscoveryStudentProfile from '@/features/batch/pages/DiscoveryStudentProf
 
 // Messaging
 import MessagesPage   from '@/features/messaging/pages/MessagesPage';
-import VoiceNotesPage from '@/features/messaging/pages/VoiceNotesPage';
 import { ChatHeadsProvider } from '@/features/messaging/context/ChatHeadsContext';
 import GlobalChatHeads from '@/features/messaging/components/GlobalChatHeads';
 
@@ -84,6 +84,17 @@ function ConsentWrapper({ children }) {
       {children}
     </>
   );
+}
+
+function AlumniRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageSpinner />;
+  if (!user || !user.email_verified) return <Navigate to="/login" replace />;
+  const alumni = user.is_alumni === true
+    || user.role === 'alumni'
+    || user.academic_status === 'Alumni';
+  if (!alumni) return <Navigate to="/dashboard" replace />;
+  return <ConsentWrapper>{children}</ConsentWrapper>;
 }
 
 function ProtectedRoute({ children }) {
@@ -131,12 +142,16 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <ChatHeadsProvider>
+          <div id="sb-app-content">
+          <RouteErrorBoundary>
           <Routes>
             <Route path="/maintenance" element={<MaintenancePage />} />
 
             <Route element={<MaintenanceLayout />}>
 
               {/* Public */}
+              <Route path="/terms"          element={<TermsPage />} />
+              <Route path="/privacy"        element={<TermsPage />} />
               <Route path="/"               element={<GuestRoute><LandingPage /></GuestRoute>} />
               <Route path="/login"          element={<GuestRoute><LoginPage /></GuestRoute>} />
               <Route path="/register"       element={<GuestRoute><RegisterPage /></GuestRoute>} />
@@ -229,7 +244,6 @@ export default function App() {
               {/* Messaging */}
               <Route path="/messages"     element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} />
               <Route path="/messages/:id" element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} />
-              <Route path="/voice-notes"  element={<ProtectedRoute><VoiceNotesPage /></ProtectedRoute>} />
               <Route path="/announcements" element={<ProtectedRoute><AnnouncementsPage /></ProtectedRoute>} />
 
               {/* Payment */}
@@ -260,11 +274,11 @@ export default function App() {
               {/* Alumni Tracker */}
               <Route
                 path="/alumni"
-                element={<ProtectedRoute><AlumniTrackerPage /></ProtectedRoute>}
+                element={<AlumniRoute><AlumniTrackerPage /></AlumniRoute>}
               />
               <Route
                 path="/alumni-tracker"
-                element={<ProtectedRoute><AlumniTrackerPage /></ProtectedRoute>}
+                element={<AlumniRoute><AlumniTrackerPage /></AlumniRoute>}
               />
 
               {/* Fallback */}
@@ -272,8 +286,10 @@ export default function App() {
 
             </Route>
           </Routes>
+          </RouteErrorBoundary>
+          </div>
           <GlobalChatHeads />
-          <PrivacyScreen />
+          <ScreenProtection />
           </ChatHeadsProvider>
         </BrowserRouter>
       </AuthProvider>
@@ -288,6 +304,37 @@ export default function App() {
 function AnalyticsPageWrapper() {
   const { user } = useAuth();
   return <AnalyticsPage isAuthenticated={!!user} currentUser={user} />;
+}
+
+class RouteErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-[#f4f7fe] px-6 text-center">
+        <h1 className="m-0 text-2xl font-black text-[#1d2b4b]">This page needs a refresh</h1>
+        <p className="m-0 max-w-md text-sm text-slate-500">
+          The rest of Sinag-Bughaw is still available. Reload to continue where you left off.
+        </p>
+        <button
+          type="button"
+          className="rounded-xl border-0 bg-[#1d2b4b] px-5 py-2.5 text-sm font-bold text-white cursor-pointer"
+          onClick={() => window.location.assign('/dashboard')}
+        >
+          Back to dashboard
+        </button>
+      </div>
+    );
+  }
 }
 
 function FullPageSpinner() {

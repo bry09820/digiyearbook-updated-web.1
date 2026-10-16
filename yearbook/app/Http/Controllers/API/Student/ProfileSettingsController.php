@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API\Student;
 
 use App\Http\Controllers\Controller;
 use App\Models\AlumniActivity;
+use App\Models\Batch;
 use App\Models\AuditLog;
 use App\Models\ProfileView;
 use App\Models\User;
@@ -38,6 +39,7 @@ class ProfileSettingsController extends Controller
         $user = $request->user();
         $user->update(['profile_visibility' => $request->visibility]);
         $user->refresh();
+        User::bumpVisibilityEpoch();
         $this->notifyProfileUpdate($user, 'Your profile visibility was updated successfully.');
 
         return response()->json([
@@ -76,7 +78,7 @@ class ProfileSettingsController extends Controller
         $validated = $request->validate([
             'student_id'      => 'nullable|string|max:255',
             'course'          => 'nullable|string|max:255',
-            'graduation_year' => 'nullable|integer|min:1990|max:2100',
+            'graduation_year' => Batch::yearRules(false),
             'batch'           => 'nullable|string|max:255',
         ]);
 
@@ -104,6 +106,15 @@ class ProfileSettingsController extends Controller
             }
         } else {
             $user->update($validated);
+        }
+
+        $user = $user->fresh()->load('studentRecord', 'section');
+        if (array_key_exists('graduation_year', $validated) && $validated['graduation_year'] !== null) {
+            $user->forceFill(['graduation_year' => (int) $validated['graduation_year']])->saveQuietly();
+            $user->refresh()->load('studentRecord', 'section');
+        }
+        if (array_key_exists('graduation_year', $validated)) {
+            $user->syncIdentityFromGraduationYear();
         }
 
         AuditLog::record($request, 'API Update Academic', 'Updated academic info for ' . $request->user()->email);

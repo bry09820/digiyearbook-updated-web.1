@@ -3,6 +3,7 @@ import { useSection } from '@/features/batch/hooks/useBatch';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import LoadingSkeleton from '@/components/ui/LoadingSkeleton';
+import { discoveryProfilePath } from '@/utils/studentProfilePath';
 
 // Helper: resolve storage URLs from env
 const storageUrl = (path) =>
@@ -62,7 +63,7 @@ export default function SectionDetailPage() {
     : (students?.data ?? []);
 
   // Loading
-  if (loading) return (
+  if (loading && !section) return (
     <div className="min-h-screen bg-[#f4f7fe] px-4 py-8">
       <div className="mx-auto w-full max-w-5xl">
         <LoadingSkeleton variant="page" count={1} />
@@ -223,10 +224,9 @@ export default function SectionDetailPage() {
               const photo = storageUrl(student.photo);
 
               return (
-                // FIX: navigate to DiscoveryStudentProfile via /discover/students/:id
                 <Link
-                  key={student.id}
-                  to={`/discover/students/${student.id}`}
+                  key={student.user_id ?? student.id}
+                  to={discoveryProfilePath(student)}
                   className="no-underline relative block"
                 >
                   <div

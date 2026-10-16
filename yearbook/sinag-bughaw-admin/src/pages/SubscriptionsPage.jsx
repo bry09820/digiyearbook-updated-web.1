@@ -256,13 +256,39 @@ function StorageOverview({ stats, loading }) {
       bg:    "bg-indigo-600",
       border:"border-indigo-700",
     },
+    {
+      key:   "faculty",
+      label: "Faculty",
+      icon:  "fa-chalkboard-user",
+      color: "text-violet-700",
+      bg:    "bg-violet-50",
+      border:"border-violet-200",
+    },
+    {
+      key:   "admin",
+      label: "Admin",
+      icon:  "fa-user-shield",
+      color: "text-slate-700",
+      bg:    "bg-slate-200",
+      border:"border-slate-300",
+    },
   ];
+
+  const registeredTotal = tiers.reduce(
+    (sum, tier) => sum + Number(stats?.tiers?.[tier.key] ?? 0),
+    0,
+  );
 
   return (
     <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <i className="fas fa-database text-sm text-indigo-500" />
-        <span className="text-sm font-bold text-slate-800">Storage tier overview</span>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <i className="fas fa-database text-sm text-indigo-500" />
+          <span className="text-sm font-bold text-slate-800">Storage tier overview</span>
+        </div>
+        <span className="text-xs font-bold text-slate-500">
+          {loading ? "…" : `${registeredTotal.toLocaleString()} registered accounts`}
+        </span>
       </div>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
         {tiers.map(t => (
@@ -275,7 +301,7 @@ function StorageOverview({ stats, loading }) {
               ? <Skeleton className="h-7 w-12 mt-1" />
               : <div className="text-2xl font-black text-slate-800 leading-none">{stats?.tiers?.[t.key] ?? 0}</div>
             }
-            <div className="mt-1 text-[11px] text-slate-400">subscribers</div>
+            <div className="mt-1 text-[11px] text-slate-400">accounts</div>
           </div>
         ))}
       </div>
@@ -292,7 +318,7 @@ function StatCards({ stats, loading }) {
       icon:  "fa-users",
       color: "#065f46",
       bg:    "#d1fae5",
-      value: stats?.active_count ?? 0,
+      value: Number(stats?.tiers?.premium_standard ?? 0) + Number(stats?.tiers?.premium ?? 0),
     },
     {
       key:   "revenue",
