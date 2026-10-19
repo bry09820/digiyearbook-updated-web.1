@@ -6,7 +6,7 @@ import { useState, useRef, useEffect } from 'react';
 import { messagesApi }                 from '@/api/messaging.api';
 import { useAppConfig }                from '@/features/platform/AppConfigProvider';
 import { getSubscriptionTier }         from '@/utils/subscription';
-import { academicStatusLabel, isAlumniAccount } from '@/utils/academicStatus';
+import { academicStatusLabel } from '@/utils/academicStatus';
 
 // tier helper (shared logic)
 const getTier = (user) => getSubscriptionTier(user);
@@ -81,7 +81,6 @@ const NAV_LINKS = [
   { to: '/discover',  label: 'Discovery' },
   { to: '/analytics', label: 'Analytics' },
   { href: 'https://luminus-lipa.up.railway.app', label: 'Alumni Tracker', external: true },
-  { to: '/alumni', label: 'Alumni' },
 ];
 
 const BASE_DROP_ITEMS = [
@@ -114,7 +113,6 @@ export default function Navbar() {
 
   const navLinks = NAV_LINKS.filter((link) => {
     if (link.to === '/directory') return isOn('enable_student_directory_search');
-    if (link.to === '/alumni') return isAlumniAccount(user);
     return true;
   });
 
