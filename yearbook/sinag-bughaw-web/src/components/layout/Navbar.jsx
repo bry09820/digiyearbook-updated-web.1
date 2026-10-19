@@ -80,6 +80,7 @@ const NAV_LINKS = [
   { to: '/sections',  label: 'Batch'     },
   { to: '/discover',  label: 'Discovery' },
   { to: '/analytics', label: 'Analytics' },
+  { href: 'https://luminus-lipa.up.railway.app', label: 'Alumni Tracker', external: true },
   { to: '/alumni', label: 'Alumni' },
 ];
 
@@ -161,17 +162,29 @@ export default function Navbar() {
 
         {/* Desktop nav links */}
         <div className="hidden lg:flex items-center gap-0.5">
-          {navLinks.map(({ to, label }) => (
-            <Link
-              key={to} to={to}
-              className={`no-underline text-[13px] px-4 py-1.5 rounded-lg transition-all duration-150 font-medium
-                ${isActive(to)
-                  ? 'text-[#fdb813] bg-[#fdb813]/12 font-semibold'
-                  : 'text-white/60 hover:text-white hover:bg-white/8'
-                }`}
-            >
-              {label}
-            </Link>
+          {navLinks.map(({ to, href, label }) => (
+            href ? (
+              <a
+                key={href}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="no-underline text-[13px] px-4 py-1.5 rounded-lg transition-all duration-150 font-medium text-white/60 hover:text-white hover:bg-white/8"
+              >
+                {label}
+              </a>
+            ) : (
+              <Link
+                key={to} to={to}
+                className={`no-underline text-[13px] px-4 py-1.5 rounded-lg transition-all duration-150 font-medium
+                  ${isActive(to)
+                    ? 'text-[#fdb813] bg-[#fdb813]/12 font-semibold'
+                    : 'text-white/60 hover:text-white hover:bg-white/8'
+                  }`}
+              >
+                {label}
+              </Link>
+            )
           ))}
         </div>
 
@@ -315,18 +328,31 @@ export default function Navbar() {
         <div className="lg:hidden fixed top-16 left-0 right-0 z-[999] bg-[#1d2b4b]/98 backdrop-blur-lg
                         border-b border-white/10 px-4 py-3 shadow-xl">
           <div className="flex flex-col gap-0.5">
-            {navLinks.map(({ to, label }) => (
-              <Link
-                key={to} to={to}
-                onClick={() => setMobileOpen(false)}
-                className={`no-underline text-sm font-medium px-3 py-2.5 rounded-xl transition-colors
-                  ${isActive(to)
-                    ? 'text-[#fdb813] bg-[#fdb813]/12 font-semibold'
-                    : 'text-white/70 hover:text-white hover:bg-white/8'
-                  }`}
-              >
-                {label}
-              </Link>
+            {navLinks.map(({ to, href, label }) => (
+              href ? (
+                <a
+                  key={href}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setMobileOpen(false)}
+                  className="no-underline text-sm font-medium px-3 py-2.5 rounded-xl transition-colors text-white/70 hover:text-white hover:bg-white/8"
+                >
+                  {label}
+                </a>
+              ) : (
+                <Link
+                  key={to} to={to}
+                  onClick={() => setMobileOpen(false)}
+                  className={`no-underline text-sm font-medium px-3 py-2.5 rounded-xl transition-colors
+                    ${isActive(to)
+                      ? 'text-[#fdb813] bg-[#fdb813]/12 font-semibold'
+                      : 'text-white/70 hover:text-white hover:bg-white/8'
+                    }`}
+                >
+                  {label}
+                </Link>
+              )
             ))}
 
             {/* Mobile tier indicator */}

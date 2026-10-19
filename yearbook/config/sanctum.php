@@ -19,7 +19,7 @@ return [
 
     'stateful' => array_values(array_filter(array_map('trim', explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
         '%s%s',
-        'localhost,localhost:3000,localhost:5173,localhost:8000,127.0.0.1,127.0.0.1:8000,127.0.0.1:5173,::1,',
+        'localhost,localhost:3000,localhost:5173,localhost:8000,127.0.0.1,127.0.0.1:8000,127.0.0.1:5173,::1,192.168.8.33,192.168.8.33:8000,192.168.8.33:5173,192.168.8.33:8081,192.168.8.33:19000,192.168.8.33:19006,',
         Sanctum::currentApplicationUrlWithPort(),
     )))))),
 
