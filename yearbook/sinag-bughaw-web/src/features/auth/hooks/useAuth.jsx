@@ -4,8 +4,10 @@ import { presenceApi } from '@/api/messaging.api';
 
 const AuthContext = createContext(null);
 
-function isVerifiedUser(user) {
-  return Boolean(user?.email_verified);
+function isApprovedUser(user) {
+  if (!user) return false;
+  if (user.status) return user.status === 'approved';
+  return Boolean(user.email_verified);
 }
 
 export function AuthProvider({ children }) {
@@ -17,7 +19,7 @@ export function AuthProvider({ children }) {
     if (token) {
       authApi.me()
         .then(({ data }) => {
-          if (!isVerifiedUser(data)) {
+          if (!isApprovedUser(data)) {
             localStorage.removeItem('sb_token');
             setUser(null);
             return;
@@ -26,7 +28,8 @@ export function AuthProvider({ children }) {
         })
         .catch((error) => {
           const status = error?.response?.status;
-          if (status === 401 || error?.response?.data?.code === 'EMAIL_UNVERIFIED') {
+          const code = error?.response?.data?.code;
+          if (status === 401 || code === 'EMAIL_UNVERIFIED' || code === 'ACCOUNT_PENDING' || code === 'ACCOUNT_DISAPPROVED') {
             localStorage.removeItem('sb_token');
             setUser(null);
           }
@@ -45,7 +48,7 @@ export function AuthProvider({ children }) {
     const refresh = () => {
       authApi.me()
         .then(({ data }) => {
-          if (!isVerifiedUser(data)) {
+          if (!isApprovedUser(data)) {
             localStorage.removeItem('sb_token');
             setUser(null);
             return;
@@ -82,10 +85,10 @@ export function AuthProvider({ children }) {
 
   const fetchUser = useCallback(async () => {
     const { data } = await authApi.me();
-    if (!isVerifiedUser(data)) {
+    if (!isApprovedUser(data)) {
       localStorage.removeItem('sb_token');
       setUser(null);
-      throw new Error('Email verification required');
+      throw new Error('Admin approval required');
     }
     setUser(data);
     return data;
@@ -101,7 +104,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('sb_token', token);
     try {
       const { data } = await authApi.me();
-      if (!isVerifiedUser(data)) {
+      if (!isApprovedUser(data)) {
         localStorage.removeItem('sb_token');
         setUser(null);
         return null;

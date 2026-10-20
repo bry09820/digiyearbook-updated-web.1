@@ -1,9 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { authApi } from '@/api/auth.api';
 import { MAX_BATCH_YEAR, MIN_BATCH_YEAR, YEAR_OPTIONS } from '@/api/batch.api';
-import { useAuth } from '@/features/auth/hooks/useAuth';
-import ConsentModal from '../components/ConsentModal';
 
 const TERMS_PDF = '/docs/sinag-bugbaw-terms.pdf';
 
@@ -75,10 +73,7 @@ function useDebounce(fn, delay) {
 }
 
 export default function RegisterPage() {
-  const navigate = useNavigate();
-  const { setToken, fetchUser } = useAuth();
-
-  // Steps: 'form' 'otp'
+  // Steps: 'form' | 'pending'
   const [step, setStep] = useState('form');
 
   const [form, setForm] = useState({
@@ -102,19 +97,9 @@ export default function RegisterPage() {
   const [verifyState,     setVerifyState]     = useState('idle');
   const [verifiedStudent, setVerifiedStudent] = useState(null);
 
-  // OTP
-  const [otp,         setOtp]         = useState(['', '', '', '', '', '']);
-  const [resendTimer, setResendTimer] = useState(0);
-  const [showConsent, setShowConsent] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsOpen, setTermsOpen] = useState(false);
-  const otpRefs = useRef([]);
-
-  useEffect(() => {
-    if (resendTimer <= 0) return;
-    const t = setTimeout(() => setResendTimer((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [resendTimer]);
 
   useEffect(() => {
     if (!termsOpen) return undefined;
@@ -221,12 +206,8 @@ export default function RegisterPage() {
         terms_accepted: termsAccepted,
       });
 
-      // No token until OTP is verified. Backend already emailed the code.
-      if (data.email_send_failed) {
-        setSubmitError(data.message || 'Account created, but the verification email failed. Please resend.');
-      }
-      setStep('otp');
-      setResendTimer(60);
+      setPendingMessage(data.message || 'Your account is pending admin approval. You can sign in after an administrator approves it.');
+      setStep('pending');
     } catch (err) {
       const errData = err.response?.data;
       if (errData?.errors) {
@@ -240,56 +221,6 @@ export default function RegisterPage() {
       }
     } finally {
       setLoading(false);
-    }
-  };
-
-  // OTP
-  const handleOtpChange = (i, value) => {
-    if (!/^\d?$/.test(value)) return;
-    const next = [...otp];
-    next[i] = value;
-    setOtp(next);
-    if (value && i < 5) otpRefs.current[i + 1]?.focus();
-  };
-  const handleOtpKeyDown = (i, e) => {
-    if (e.key === 'Backspace' && !otp[i] && i > 0) otpRefs.current[i - 1]?.focus();
-  };
-  const handleOtpPaste = (e) => {
-    const p = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    if (p.length === 6) { setOtp(p.split('')); otpRefs.current[5]?.focus(); }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    const code = otp.join('');
-    if (code.length < 6) { setSubmitError('Please enter all 6 digits.'); return; }
-    setSubmitError('');
-    setLoading(true);
-    try {
-      const { data } = await authApi.verifyOtp(form.email, code);
-      const token = data.access_token || data.token;
-      if (token) await setToken(token);
-      else await fetchUser();
-      setShowConsent(true);
-    } catch (err) {
-      setSubmitError(err.response?.data?.message || 'Invalid or expired OTP.');
-      setOtp(['', '', '', '', '', '']);
-      otpRefs.current[0]?.focus();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResend = async () => {
-    if (resendTimer > 0) return;
-    try {
-      await authApi.sendOtp(form.email);
-      setOtp(['', '', '', '', '', '']);
-      setResendTimer(60);
-      setSubmitError('');
-      otpRefs.current[0]?.focus();
-    } catch {
-      setSubmitError('Failed to resend OTP. Please try again.');
     }
   };
 
@@ -342,15 +273,6 @@ export default function RegisterPage() {
         @keyframes shake      { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
         @keyframes float      { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
       `}</style>
-
-      {showConsent && (
-        <ConsentModal
-          onAccepted={async () => {
-            try { await fetchUser(); } catch (_) {}
-            navigate('/dashboard', { replace: true });
-          }}
-        />
-      )}
 
       {/* LEFT PANEL */}
       <div
@@ -418,7 +340,7 @@ export default function RegisterPage() {
             </Link>
           ) : (
             <button
-              onClick={() => { setStep('form'); setSubmitError(''); setOtp(['', '', '', '', '', '']); }}
+              onClick={() => { setStep('form'); setSubmitError(''); }}
               className="inline-flex items-center gap-2.5 text-slate-400 hover:text-[#1d2b4b] text-sm font-semibold transition-colors group w-fit border-none bg-transparent cursor-pointer p-0"
             >
               <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center group-hover:bg-[#1d2b4b] group-hover:text-white transition-all">
@@ -757,68 +679,27 @@ export default function RegisterPage() {
               </div>
             )}
 
-            {/* OTP STEP */}
-            {step === 'otp' && (
+            {step === 'pending' && (
               <div className="animate-[slideUp_0.35s_ease]">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-5 shadow-sm">
-                  <i className="fas fa-envelope-open-text" />
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-xl mb-5 shadow-sm">
+                  <i className="fas fa-hourglass-half" />
                 </div>
-                <h1 className="text-[1.85rem] font-black text-[#1d2b4b] mb-1 tracking-tight">Verify Your Email</h1>
-                <p className="text-slate-400 text-sm mb-1">We sent a 6-digit code to:</p>
-                <p className="text-[#3f51b5] font-bold text-sm mb-7">{form.email}</p>
+                <h1 className="text-[1.85rem] font-black text-[#1d2b4b] mb-1 tracking-tight">Pending Approval</h1>
+                <p className="text-slate-500 text-sm mb-6 leading-relaxed">{pendingMessage}</p>
 
-                {submitError && <ErrorBanner message={submitError} />}
-
-                <form onSubmit={handleVerifyOtp}>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3 text-center">
-                    Enter Verification Code
-                  </label>
-
-                  <div className="flex gap-2 justify-center mb-6" onPaste={handleOtpPaste}>
-                    {otp.map((digit, i) => (
-                      <input
-                        key={i}
-                        ref={(el) => (otpRefs.current[i] = el)}
-                        type="text" inputMode="numeric" maxLength={1} value={digit}
-                        onChange={(e) => handleOtpChange(i, e.target.value)}
-                        onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                        className={`w-12 h-12 text-center text-lg font-black bg-white border-2 rounded-xl outline-none transition-all shadow-sm
-                          ${digit
-                            ? 'border-[#3f51b5] bg-indigo-50 text-[#1d2b4b]'
-                            : 'border-slate-200 text-slate-300'}
-                          focus:border-[#3f51b5] focus:bg-indigo-50 focus:ring-4 focus:ring-[#3f51b5]/10`}
-                      />
-                    ))}
-                  </div>
-
-                  <button
-                    type="submit" disabled={loading}
-                    className="w-full bg-[#1d2b4b] hover:bg-[#162038] disabled:opacity-60 text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-lg cursor-pointer border-none text-sm"
-                  >
-                    {loading
-                      ? <><span>Verifying…</span><Spinner /></>
-                      : <><span>Verify & Continue</span><i className="fas fa-check text-xs" /></>
-                    }
-                  </button>
-                </form>
-
-                <div className="text-center mt-5 p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                  <p className="text-slate-400 text-xs mb-1.5">Didn't receive the code?</p>
-                  {resendTimer > 0
-                    ? <p className="text-slate-500 text-sm m-0">Resend in <span className="font-bold text-[#3f51b5]">{resendTimer}s</span></p>
-                    : <button onClick={handleResend} className="text-[#3f51b5] font-bold text-sm hover:underline bg-transparent border-none cursor-pointer">Resend Code</button>
-                  }
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 mb-6">
+                  <p className="text-amber-800 text-sm m-0">
+                    <span className="font-bold">{form.email}</span> is saved as pending. An administrator must approve it before you can sign in.
+                  </p>
                 </div>
 
-                <p className="text-center text-xs text-slate-400 mt-3">
-                  Wrong email?{' '}
-                  <button
-                    onClick={() => { setStep('form'); setSubmitError(''); setOtp(['', '', '', '', '', '']); }}
-                    className="text-[#3f51b5] font-semibold hover:underline bg-transparent border-none cursor-pointer text-xs"
-                  >
-                    Go back
-                  </button>
-                </p>
+                <Link
+                  to="/login"
+                  className="w-full bg-[#1d2b4b] hover:bg-[#162038] text-white font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-lg no-underline text-sm"
+                >
+                  <span>Back to Sign In</span>
+                  <i className="fas fa-arrow-right text-xs" />
+                </Link>
               </div>
             )}
 

@@ -40,10 +40,22 @@ const usersService = {
     api.patch(`${BASE}/${id}/unsuspend`),
 
   /**
-   * Mark a user as a verified alumni.
+   * Approve a pending account so the user can sign in.
+   */
+  approveUser: (id) =>
+    api.patch(`${BASE}/${id}/approve`),
+
+  /**
+   * Disapprove an account and revoke its sessions.
+   */
+  disapproveUser: (id) =>
+    api.patch(`${BASE}/${id}/disapprove`),
+
+  /**
+   * Mark a user as approved. Kept for older callers.
    */
   verifyUser: (id) =>
-    api.patch(`${BASE}/${id}/verify`),
+    api.patch(`${BASE}/${id}/approve`),
 
   /**
    * Trigger a password reset email.

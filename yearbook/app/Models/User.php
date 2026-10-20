@@ -23,6 +23,10 @@ class User extends Authenticatable
     public const ROLE_FACULTY = 'faculty';
     public const ROLE_ADMIN = 'admin';
 
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_DISAPPROVED = 'disapproved';
+
 
     public const DEPARTMENT_COURSES = [
         'SACE' => [
@@ -119,6 +123,7 @@ class User extends Authenticatable
         'motto',
         //  Consent / Verification 
         'email_verified',
+        'status',
         'consent_accepted',
         //  SSO 
         'google_id',
@@ -232,6 +237,38 @@ class User extends Authenticatable
     public function isLinkedToStudent(): bool
     {
         return ! is_null($this->student_record_id);
+    }
+
+    public function isApproved(): bool
+    {
+        return $this->status === self::STATUS_APPROVED;
+    }
+
+    /**
+     * Why this account cannot receive a session, or null when sign-in may continue.
+     *
+     * @return array{message: string, code: string}|null
+     */
+    public function loginBlockReason(): ?array
+    {
+        if (! empty($this->suspended_at) || (method_exists($this, 'trashed') && $this->trashed())) {
+            return [
+                'message' => 'Account is suspended or unavailable.',
+                'code'    => 'ACCOUNT_UNAVAILABLE',
+            ];
+        }
+
+        return match ($this->status) {
+            self::STATUS_APPROVED => null,
+            self::STATUS_DISAPPROVED => [
+                'message' => 'Your account was disapproved. Please contact an administrator if you believe this is a mistake.',
+                'code'    => 'ACCOUNT_DISAPPROVED',
+            ],
+            default => [
+                'message' => 'Your account is pending admin approval. You can sign in after an administrator approves it.',
+                'code'    => 'ACCOUNT_PENDING',
+            ],
+        };
     }
 
     public function activeSubscription(): ?Subscription
@@ -681,8 +718,9 @@ class User extends Authenticatable
         // Yearbook faculty live in the faculties table, not users.role.
         $faculty = \App\Models\Faculty::query()->count();
         $admins = (clone $accounts)->where('role', self::ROLE_ADMIN)->count();
-        $verified = (clone $accounts)->where('email_verified', true)->whereNull('suspended_at')->count();
-        $unverified = (clone $accounts)->where('email_verified', false)->whereNull('suspended_at')->count();
+        $pending = (clone $accounts)->where('status', self::STATUS_PENDING)->whereNull('suspended_at')->count();
+        $approved = (clone $accounts)->where('status', self::STATUS_APPROVED)->whereNull('suspended_at')->count();
+        $disapproved = (clone $accounts)->where('status', self::STATUS_DISAPPROVED)->whereNull('suspended_at')->count();
         $suspended = (clone $accounts)->whereNotNull('suspended_at')->count();
 
         return [
@@ -691,8 +729,12 @@ class User extends Authenticatable
             'total_alumni' => $alumni,
             'faculty_members' => $faculty,
             'admin_accounts' => $admins,
-            'verified_users' => $verified,
-            'unverified_users' => $unverified,
+            'pending_users' => $pending,
+            'approved_users' => $approved,
+            'disapproved_users' => $disapproved,
+            // Kept so older dashboard cards still receive a number.
+            'verified_users' => $approved,
+            'unverified_users' => $pending,
             'suspended_users' => $suspended,
         ];
     }

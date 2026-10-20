@@ -113,7 +113,7 @@ export default function Register() {
 
     try {
       setLoading(true);
-      await register({
+      const data = await register({
         ...form,
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
@@ -121,9 +121,19 @@ export default function Register() {
         email: form.email.trim(),
         graduation_year: Number(form.graduation_year),
         batch: form.graduation_year,
+        account_status: 'student',
         intent,
         consent_accepted: true,
+        terms_accepted: true,
       });
+      if (data?.requires_approval || data?.requires_otp === false) {
+        Alert.alert(
+          'Pending approval',
+          data?.message || 'Your account is pending admin approval. You can sign in after an administrator approves it.',
+        );
+        router.replace('/login');
+        return;
+      }
       await sendOtp(form.email.trim());
       setScreen('otp');
       setOtp('');

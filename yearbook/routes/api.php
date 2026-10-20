@@ -450,6 +450,8 @@ Route::middleware(['auth:sanctum', 'active.account', 'admin.only'])
         Route::patch('/{user}',               [UserManagementController::class, 'update']);
         Route::patch('/{user}/suspend',       [UserManagementController::class, 'suspend']);
         Route::patch('/{user}/unsuspend',     [UserManagementController::class, 'unsuspend']);
+        Route::patch('/{user}/approve',       [UserManagementController::class, 'approve']);
+        Route::patch('/{user}/disapprove',    [UserManagementController::class, 'disapprove']);
         Route::patch('/{user}/verify',        [UserManagementController::class, 'verify']);
         Route::post('/{user}/reset-password', [UserManagementController::class, 'resetPassword']);
         Route::delete('/{user}',              [UserManagementController::class, 'destroy']);

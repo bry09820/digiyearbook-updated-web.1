@@ -291,8 +291,9 @@ export default function AnalyticsPage() {
           <StatCard toneClass="text-indigo-600" label="Registered Users" value={overview.total_users?.toLocaleString()} sub="Matches User Management" />
           <StatCard toneClass="text-sky-600" label="Current Students" value={overview.total_students?.toLocaleString()} sub="Same student filter" />
           <StatCard toneClass="text-amber-600" label="Alumni" value={overview.total_alumni?.toLocaleString()} sub="Same alumni filter" />
-          <StatCard toneClass="text-emerald-600" label="Verified" value={overview.verified_users?.toLocaleString()} sub="Verified and active" />
-          <StatCard toneClass="text-orange-600" label="Unverified" value={overview.unverified_users?.toLocaleString()} sub="Not yet verified" />
+          <StatCard toneClass="text-emerald-600" label="Approved" value={overview.approved_users?.toLocaleString()} sub="Allowed to sign in" />
+          <StatCard toneClass="text-orange-600" label="Pending" value={overview.pending_users?.toLocaleString()} sub="Waiting for approval" />
+          <StatCard toneClass="text-red-600" label="Disapproved" value={overview.disapproved_users?.toLocaleString()} sub="Sign-in blocked" />
           <StatCard toneClass="text-sky-600" label="Enrolled" value={overview.enrolled_students?.toLocaleString()} sub="Student records in a section" />
           <StatCard toneClass="text-violet-600" label="Total Views" value={overview.total_views?.toLocaleString()} sub="Profiles and content" />
           <StatCard toneClass="text-emerald-600" label="Views Today" value={overview.views_today?.toLocaleString()} sub="Last 24 hours" />

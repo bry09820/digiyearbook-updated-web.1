@@ -182,17 +182,21 @@ class SocialAuthController extends Controller
                         ->first();
 
             if ($user) {
-                // Existing user link Google account and refresh token/avatar
-                $user->update([
-                    'google_id'         => $googleUser->getId(),
-                    'google_token'      => $googleUser->token,
-                    'avatar'            => $googleUser->getAvatar(),
-                    'email_verified'    => true,
-                    'email_verified_at' => $user->email_verified_at ?? now(),
-                    'consent_accepted'  => true,
-                ]);
+                // Existing user link Google account and refresh token/avatar.
+                // Do not override an admin approval decision.
+                $updates = [
+                    'google_id'        => $googleUser->getId(),
+                    'google_token'     => $googleUser->token,
+                    'avatar'           => $googleUser->getAvatar(),
+                    'consent_accepted' => true,
+                ];
+                if ($user->isApproved()) {
+                    $updates['email_verified'] = true;
+                    $updates['email_verified_at'] = $user->email_verified_at ?? now();
+                }
+                $user->update($updates);
             } else {
-                // Create full record for first-time SSO user
+                // Google already confirmed this email, so first-time SSO can sign in.
                 $user = User::create([
                     'google_id'         => $googleUser->getId(),
                     'name'              => $googleUser->getName(),
@@ -203,6 +207,7 @@ class SocialAuthController extends Controller
                     'avatar'            => $googleUser->getAvatar(),
                     'email_verified'    => true,
                     'email_verified_at' => now(),
+                    'status'            => User::STATUS_APPROVED,
                     'consent_accepted'  => true,
                     'password'          => Hash::make(Str::random(32)),
                 ]);
@@ -239,6 +244,14 @@ class SocialAuthController extends Controller
                 'exception' => get_class($e),
                 'message'   => $e->getMessage(),
             ]);
+        }
+
+        if (! $user->isApproved()) {
+            $error = $user->status === User::STATUS_DISAPPROVED
+                ? 'account_disapproved'
+                : 'account_pending';
+
+            return $this->redirectToMobileOrWeb($request, 'error='.$error);
         }
 
         // 5. Issue Sanctum token

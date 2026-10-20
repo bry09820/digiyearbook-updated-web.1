@@ -25,6 +25,8 @@ export default function LoginPage() {
     const e = searchParams.get('error');
     if (e === 'sso_failed')          return 'Google sign-in failed. Please try again.';
     if (e === 'unauthorized_domain') return 'Please use a valid Google account.';
+    if (e === 'account_pending')     return 'Your account is pending admin approval. You can sign in after an administrator approves it.';
+    if (e === 'account_disapproved') return 'Your account was disapproved. Please contact an administrator.';
     return '';
   });
   const [loading,     setLoading]     = useState(false);
@@ -41,12 +43,25 @@ export default function LoginPage() {
   const handleLoginSubmit = async (e) => {
     e.preventDefault(); setError(''); setLoading(true);
     try {
-      // Credentials only — token is issued after OTP verification.
       const data = await loginCredentials(email, password);
-      if (data?.email_send_failed) {
-        setError(data.message || 'We could not send the verification email. Please use Resend.');
+      const token = data?.access_token || data?.token;
+      if (token) {
+        if (data.session_notice) window.alert(data.session_notice);
+        await setToken(token);
+        const { data: consent } = await consentApi.status();
+        if (!consent.accepted) setShowConsent(true);
+        else navigate('/dashboard', { replace: true });
+        return;
       }
-      setStep('otp'); setResendTimer(60);
+      if (data?.requires_otp) {
+        if (data?.email_send_failed) {
+          setError(data.message || 'We could not send the verification email. Please use Resend.');
+        }
+        setStep('otp');
+        setResendTimer(60);
+        return;
+      }
+      setError(data?.message || 'Unable to sign in.');
     } catch (err) {
       setError(err.response?.data?.message || 'Invalid credentials. Please try again.');
     } finally { setLoading(false); }
@@ -230,7 +245,7 @@ export default function LoginPage() {
                   {/* Sign in button */}
                   <button type="submit" disabled={loading}
                     className="w-full bg-[#F5A623] hover:bg-[#f7b73d] disabled:opacity-60 text-[#1B2A4A] font-semibold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-lg cursor-pointer border-none text-sm">
-                    {loading ? <><span>Sending OTP…</span><Spinner /></> : <><span>Sign In</span><i className="fas fa-arrow-right text-xs" aria-hidden="true" /></>}
+                    {loading ? <><span>Sending code…</span><Spinner /></> : <><span>Sign In</span><i className="fas fa-arrow-right text-xs" aria-hidden="true" /></>}
                   </button>
                 </form>
 

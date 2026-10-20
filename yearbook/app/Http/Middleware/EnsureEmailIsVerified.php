@@ -21,12 +21,16 @@ class EnsureEmailIsVerified
             return $next($request);
         }
 
-        if ($actor instanceof User && ! $actor->email_verified) {
+        if ($actor instanceof User && ! $actor->isApproved()) {
             $request->user()?->currentAccessToken()?->delete();
 
+            $disapproved = $actor->status === User::STATUS_DISAPPROVED;
+
             return response()->json([
-                'message' => 'Email verification required. Please enter the code sent to your email.',
-                'code'    => 'EMAIL_UNVERIFIED',
+                'message' => $disapproved
+                    ? 'Your account was disapproved. Please contact an administrator.'
+                    : 'Your account is pending admin approval.',
+                'code'    => $disapproved ? 'ACCOUNT_DISAPPROVED' : 'ACCOUNT_PENDING',
             ], 403);
         }
 

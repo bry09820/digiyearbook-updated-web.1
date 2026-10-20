@@ -113,6 +113,7 @@ class AuthController extends Controller
                 'profile_picture'   => $studentRecord?->photo,
                 'consent_accepted'  => true,
                 'email_verified'    => false,
+                'status'            => User::STATUS_PENDING,
             ]);
         } catch (\Throwable $e) {
             Log::error('Registration failed', [
@@ -146,34 +147,16 @@ class AuthController extends Controller
             ]);
         }
 
-        // Do not issue an access token until the email OTP is verified.
-        try {
-            $this->sendVerificationOtp($user->email);
-        } catch (\Throwable $e) {
-            Log::error('Registration OTP send failed', [
-                'email'   => $user->email,
-                'message' => $e->getMessage(),
-            ]);
-
-            // Account exists; OTP row may already be stored — client can resend.
-            return response()->json([
-                'user'              => $this->authUserPayload($user->load('studentRecord', 'section')),
-                'requires_otp'      => true,
-                'email'             => $user->email,
-                'email_send_failed' => true,
-                'message'           => 'Account created, but we could not send the verification email. Please use Resend.',
-                'is_graduate'       => ! is_null($studentRecord),
-            ], 201);
-        }
-
         $user->load('studentRecord', 'section');
 
         return response()->json([
-            'user'         => $this->authUserPayload($user),
-            'requires_otp' => true,
-            'email'        => $user->email,
-            'message'      => 'Account created. Enter the verification code sent to your email.',
-            'is_graduate'  => ! is_null($studentRecord),
+            'user'               => $this->authUserPayload($user),
+            'requires_otp'       => false,
+            'requires_approval'  => true,
+            'status'             => User::STATUS_PENDING,
+            'email'              => $user->email,
+            'message'            => 'Account created and is pending admin approval. You can sign in after an administrator approves your account.',
+            'is_graduate'        => ! is_null($studentRecord),
         ], 201);
     }
 
@@ -218,8 +201,11 @@ class AuthController extends Controller
 
         RateLimiter::clear($key);
 
+        if ($denied = $this->accountAccessDenied($user)) {
+            return $denied;
+        }
+
         try {
-            // Credentials OK — require email OTP before issuing a session token.
             $this->sendVerificationOtp($user->email);
 
             return response()->json([
@@ -234,7 +220,6 @@ class AuthController extends Controller
                 'message' => $e->getMessage(),
             ]);
 
-            // OTP may still be stored — advance to verification UI and allow Resend.
             return response()->json([
                 'requires_otp'      => true,
                 'email'             => $user->email,
@@ -407,11 +392,8 @@ class AuthController extends Controller
             ], 401);
         }
 
-        if (! empty($user->suspended_at) || (method_exists($user, 'trashed') && $user->trashed())) {
-            return response()->json([
-                'message' => 'Account is suspended or unavailable.',
-                'code'    => 'ACCOUNT_UNAVAILABLE',
-            ], 403);
+        if ($denied = $this->accountAccessDenied($user)) {
+            return $denied;
         }
 
         RateLimiter::clear($rateKey);
@@ -509,6 +491,10 @@ class AuthController extends Controller
             return response()->json(['message' => 'OTP sent to your email.']);
         }
 
+        if ($denied = $this->accountAccessDenied($user)) {
+            return $denied;
+        }
+
         try {
             $this->sendVerificationOtp($user->email);
         } catch (\Throwable $e) {
@@ -547,10 +533,9 @@ class AuthController extends Controller
             return response()->json(['message' => 'User not found.'], 404);
         }
 
-        $user->update([
-            'email_verified'    => true,
-            'email_verified_at' => $user->email_verified_at ?? now(),
-        ]);
+        if ($denied = $this->accountAccessDenied($user)) {
+            return $denied;
+        }
 
         $issued = $this->issueAccessToken($user);
         if (isset($issued['error'])) {
@@ -563,7 +548,7 @@ class AuthController extends Controller
         $this->markPresence($user->id, true);
 
         return response()->json([
-            'message'        => 'Email verified successfully.',
+            'message'        => 'Signed in.',
             'session_notice' => $issued['notice'] ?? null,
             'access_token'   => $token,
             'token'          => $token,
@@ -745,6 +730,7 @@ class AuthController extends Controller
             'profile_visibility'  => $user->profile_visibility ?: 'public',
             'visibility'          => $user->profile_visibility ?: 'public',
             'email_verified'      => (bool) $user->email_verified,
+            'status'              => $user->status ?: User::STATUS_PENDING,
             'consent_accepted'    => (bool) $user->consent_accepted,
             'is_alumni'           => $user->isAlumni(),
             'academic_status'     => $user->academicStatusLabel(),
@@ -846,6 +832,16 @@ class AuthController extends Controller
         }
 
         return substr($digits, 0, 6);
+    }
+
+    private function accountAccessDenied(User $user)
+    {
+        $reason = $user->loginBlockReason();
+        if ($reason === null) {
+            return null;
+        }
+
+        return response()->json($reason, 403);
     }
 
     private function issueAccessToken(User $user): array

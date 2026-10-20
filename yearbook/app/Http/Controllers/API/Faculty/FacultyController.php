@@ -85,8 +85,11 @@ class FacultyController extends Controller
             'total_students' => $accounts['total_students'],
             'total_alumni' => $accounts['total_alumni'],
             'faculty_members' => $accounts['faculty_members'],
-            'verified_users' => $accounts['verified_users'],
-            'unverified_users' => $accounts['unverified_users'],
+            'pending_users' => $accounts['pending_users'],
+            'approved_users' => $accounts['approved_users'],
+            'disapproved_users' => $accounts['disapproved_users'],
+            'verified_users' => $accounts['approved_users'],
+            'unverified_users' => $accounts['pending_users'],
         ]);
     }
 

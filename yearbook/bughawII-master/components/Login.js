@@ -72,12 +72,26 @@ export default function Login() {
 
     try {
       setLoading(true);
-      await login(email.trim(), password);
-      await sendOtp(email.trim());
-      setStep('otp');
-      setResendSeconds(45);
-      setOtp(emptyOtp);
-      setTimeout(() => otpInputRef.current?.focus?.(), 150);
+      const data = await login(email.trim(), password);
+      if (data?.access_token || data?.token) {
+        await fetchCurrentUser();
+        const consent = await getConsentStatus().catch(() => ({ accepted: true }));
+        if (consent?.accepted === false) {
+          setShowConsent(true);
+        } else {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          router.replace('/(tabs)/home');
+        }
+        return;
+      }
+      if (data?.requires_otp) {
+        setStep('otp');
+        setResendSeconds(45);
+        setOtp(emptyOtp);
+        setTimeout(() => otpInputRef.current?.focus?.(), 150);
+        return;
+      }
+      Alert.alert('Login failed', data?.message || 'Unable to sign in.');
     } catch (error) {
       Alert.alert('Login failed', getErrorMessage(error, 'Please check your credentials.'));
     } finally {

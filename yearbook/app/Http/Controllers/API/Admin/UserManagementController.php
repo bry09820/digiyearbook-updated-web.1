@@ -7,8 +7,11 @@ use App\Http\Controllers\Concerns\AuditsAdminActions;
 use App\Models\AuditLog;
 use App\Models\Batch;
 use App\Models\User;
+use App\Notifications\AccountApprovedNotification;
+use App\Notifications\AccountDisapprovedNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Validation\Rule;
 
@@ -44,10 +47,13 @@ class UserManagementController extends Controller
 
         if ($status = $request->get('status')) {
             match ($status) {
-                'verified'   => $query->where('email_verified', true)->whereNull('suspended_at'),
-                'unverified' => $query->where('email_verified', false)->whereNull('suspended_at'),
-                'suspended'  => $query->whereNotNull('suspended_at'),
-                default      => null,
+                'pending'      => $query->where('status', User::STATUS_PENDING)->whereNull('suspended_at'),
+                'approved'     => $query->where('status', User::STATUS_APPROVED)->whereNull('suspended_at'),
+                'disapproved'  => $query->where('status', User::STATUS_DISAPPROVED)->whereNull('suspended_at'),
+                'verified'     => $query->where('status', User::STATUS_APPROVED)->whereNull('suspended_at'),
+                'unverified'   => $query->where('status', User::STATUS_PENDING)->whereNull('suspended_at'),
+                'suspended'    => $query->whereNotNull('suspended_at'),
+                default        => null,
             };
         }
 
@@ -164,25 +170,94 @@ class UserManagementController extends Controller
         ]);
     }
 
-    // PATCH /api/admin/users/{id}/verify
-    public function verify(User $user): JsonResponse
+    // PATCH /api/admin/users/{id}/approve
+    public function approve(User $user): JsonResponse
     {
-        $user->update([
-            'role'              => User::ROLE_ALUMNI,
+        $user->forceFill([
+            'status'            => User::STATUS_APPROVED,
             'email_verified'    => true,
-            'email_verified_at' => now(),
-        ]);
+            'email_verified_at' => $user->email_verified_at ?? now(),
+        ])->save();
+
+        $emailSent = $this->sendAccountDecisionEmail($user, User::STATUS_APPROVED);
 
         $this->audit(
             AuditLog::ACTION_USER_UPDATED,
-            "Manually verified user #{$user->id} ({$user->email}) as alumni.",
-            AuditLog::STATUS_SUCCESS,
+            "Approved user #{$user->id} ({$user->email}).".($emailSent ? ' Approval email sent.' : ' Approval email could not be sent.'),
+            $emailSent ? AuditLog::STATUS_SUCCESS : AuditLog::STATUS_WARNING,
             null,
             $user->id,
             "user#{$user->id}",
         );
 
-        return response()->json(['message' => 'User verified as alumni.']);
+        return response()->json([
+            'message' => $emailSent
+                ? 'User approved. A confirmation email was sent to '.$user->email.'.'
+                : 'User approved, but the confirmation email could not be sent.',
+            'email_sent' => $emailSent,
+            'data'    => $user->fresh(),
+        ]);
+    }
+
+    // PATCH /api/admin/users/{id}/disapprove
+    public function disapprove(User $user): JsonResponse
+    {
+        if ($user->role === 'admin') {
+            return response()->json(['message' => 'Cannot disapprove an admin account.'], 403);
+        }
+
+        $user->forceFill([
+            'status'         => User::STATUS_DISAPPROVED,
+            'email_verified' => false,
+        ])->save();
+        $user->tokens()->delete();
+
+        $emailSent = $this->sendAccountDecisionEmail($user, User::STATUS_DISAPPROVED);
+
+        $this->audit(
+            AuditLog::ACTION_USER_UPDATED,
+            "Disapproved user #{$user->id} ({$user->email}). All active sessions revoked.".($emailSent ? ' Disapproval email sent.' : ' Disapproval email could not be sent.'),
+            AuditLog::STATUS_WARNING,
+            null,
+            $user->id,
+            "user#{$user->id}",
+        );
+
+        return response()->json([
+            'message' => $emailSent
+                ? 'User disapproved. A notification email was sent to '.$user->email.'.'
+                : 'User disapproved, but the notification email could not be sent.',
+            'email_sent' => $emailSent,
+            'data'    => $user->fresh(),
+        ]);
+    }
+
+    private function sendAccountDecisionEmail(User $user, string $decision): bool
+    {
+        $email = strtolower(trim((string) $user->email));
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            Log::warning("Account {$decision} email skipped for user #{$user->id}: invalid email.");
+
+            return false;
+        }
+
+        try {
+            $user->notify($decision === User::STATUS_APPROVED
+                ? new AccountApprovedNotification()
+                : new AccountDisapprovedNotification());
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::error("Account {$decision} email failed for {$email}: ".$e->getMessage());
+
+            return false;
+        }
+    }
+
+    // PATCH /api/admin/users/{id}/verify
+    public function verify(User $user): JsonResponse
+    {
+        return $this->approve($user);
     }
 
     // POST /api/admin/users/{id}/reset-password

@@ -1,14 +1,15 @@
 /**
  * UsersPage.jsx
  * NU Lipa / Sinag-Bughaw — Admin Panel
- * User Management: view, search, filter, suspend, verify, role-assign
+ * User Management: view, search, filter, suspend, approve, disapprove, role-assign
  *
  * API: GET    /api/admin/users
  *      GET    /api/admin/users/{id}
  *      PATCH  /api/admin/users/{id}
  *      PATCH  /api/admin/users/{id}/suspend
  *      PATCH  /api/admin/users/{id}/unsuspend
- *      PATCH  /api/admin/users/{id}/verify
+ *      PATCH  /api/admin/users/{id}/approve
+ *      PATCH  /api/admin/users/{id}/disapprove
  *      DELETE /api/admin/users/{id}
  *      POST   /api/admin/users/{id}/reset-password
  */
@@ -64,10 +65,26 @@ function roleBadge(role, label) {
   return <Badge label={label || s.label} tone={s.tone} />;
 }
 
+function approvalStatus(user) {
+  const status = String(user.status || "").toLowerCase();
+  if (status === "approved" || status === "disapproved" || status === "pending") return status;
+  return user.email_verified ? "approved" : "pending";
+}
+
 function statusBadge(user) {
-  if (user.suspended_at) return <Badge label="Suspended" tone="red" />;
-  if (user.email_verified) return <Badge label="Verified" tone="emerald" />;
-  return <Badge label="Unverified" tone="amber" />;
+  const status = approvalStatus(user);
+  const approval = status === "approved"
+    ? <Badge label="Approved" tone="emerald" />
+    : status === "disapproved"
+      ? <Badge label="Disapproved" tone="red" />
+      : <Badge label="Pending" tone="amber" />;
+
+  return (
+    <>
+      {approval}
+      {user.suspended_at && <Badge label="Suspended" tone="red" />}
+    </>
+  );
 }
 
 function hasName(user) {
@@ -280,7 +297,7 @@ function UserModal({ user, onClose, onSaved, toast }) {
   );
 }
 
-function ActionMenu({ user, onEdit, onSuspend, onUnsuspend, onVerify, onResetPw, onDelete }) {
+function ActionMenu({ user, onEdit, onSuspend, onUnsuspend, onApprove, onDisapprove, onResetPw, onDelete }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -325,7 +342,8 @@ function ActionMenu({ user, onEdit, onSuspend, onUnsuspend, onVerify, onResetPw,
             ? <Item label="Unsuspend" onClick={onUnsuspend} />
             : <Item label="Suspend" onClick={onSuspend} color="warning" />
           }
-          {!user.email_verified && <Item label="Verify Alumni" onClick={onVerify} />}
+          {approvalStatus(user) !== "approved" && <Item label="Approve" onClick={onApprove} />}
+          {approvalStatus(user) !== "disapproved" && <Item label="Disapprove" onClick={onDisapprove} color="danger" />}
           <Item label="Reset Password" onClick={onResetPw} />
           <div className="my-1 h-px bg-slate-200" />
           <Item label="Delete" onClick={onDelete} color="danger" />
@@ -439,24 +457,26 @@ export default function UsersPage() {
       let response = null;
       if (type === "suspend")    response = await api.patch(`/admin/users/${user.id}/suspend`);
       if (type === "unsuspend")  response = await api.patch(`/admin/users/${user.id}/unsuspend`);
-      if (type === "verify")     response = await api.patch(`/admin/users/${user.id}/verify`);
+      if (type === "approve")    response = await api.patch(`/admin/users/${user.id}/approve`);
+      if (type === "disapprove") response = await api.patch(`/admin/users/${user.id}/disapprove`);
       if (type === "resetpw")    response = await api.post(`/admin/users/${user.id}/reset-password`);
       if (type === "delete")     response = await api.delete(`/admin/users/${user.id}`);
 
       const msgs = {
         suspend: "User suspended.",
         unsuspend: "User unsuspended.",
-        verify: "User verified.",
+        approve: "User approved.",
+        disapprove: "User disapproved.",
         resetpw: "Password reset email sent.",
         delete: "User deleted.",
       };
-      toast(msgs[type]);
+      toast(response?.data?.message || msgs[type]);
       if (response?.data?.data && type !== "delete") {
         setUsers(prev => prev.map(item => item.id === user.id ? { ...item, ...response.data.data } : item));
       }
       setConfirm(null);
       fetchUsers(page, search, roleFilter, statusFilter);
-      if (type === "delete" || type === "verify") notifyAdminAccountsChanged();
+      if (type === "delete" || type === "approve" || type === "disapprove") notifyAdminAccountsChanged();
     } catch {
       toast("Action failed. Please try again.", "error");
     } finally {
@@ -467,13 +487,14 @@ export default function UsersPage() {
   const confirmMap = {
     suspend: { title: "Suspend User", message: (u) => `Suspend ${u.first_name} ${u.last_name}? They won't be able to log in.`, label: "Suspend", color: "warning" },
     unsuspend: { title: "Unsuspend User", message: (u) => `Re-activate ${u.first_name} ${u.last_name}'s account?`, label: "Unsuspend", color: "success" },
-    verify: { title: "Verify Alumni", message: (u) => `Mark ${u.first_name} ${u.last_name} as a verified alumni?`, label: "Verify", color: "primary" },
+    approve: { title: "Approve Account", message: (u) => `Approve ${u.first_name} ${u.last_name}? They will be able to sign in.`, label: "Approve", color: "success" },
+    disapprove: { title: "Disapprove Account", message: (u) => `Disapprove ${u.first_name} ${u.last_name}? They will not be able to sign in.`, label: "Disapprove", color: "danger" },
     resetpw: { title: "Reset Password", message: (u) => `Send a password reset email to ${u.email}?`, label: "Send Reset", color: "primary" },
     delete: { title: "Delete User", message: (u) => `Permanently delete ${u.first_name} ${u.last_name}? This cannot be undone.`, label: "Delete", color: "danger" },
   };
 
   const displayedUsers = users;
-  const verifiedOnly = statusFilter === "verified";
+  const pendingOnly = statusFilter === "pending";
 
   return (
     <>
@@ -484,13 +505,14 @@ export default function UsersPage() {
         </div>
 
         {summary && (
-          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             {[
               ["Registered users", summary.total_users],
               ["Current students", summary.total_students],
               ["Alumni", summary.total_alumni],
-              ["Verified", summary.verified_users],
-              ["Unverified", summary.unverified_users],
+              ["Pending", summary.pending_users],
+              ["Approved", summary.approved_users],
+              ["Disapproved", summary.disapproved_users],
             ].map(([label, value]) => (
               <div key={label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
@@ -516,8 +538,9 @@ export default function UsersPage() {
           </select>
           <select value={statusFilter} onChange={(e) => handleFilter("status", e.target.value)} className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200">
             <option value="">All Statuses</option>
-            <option value="verified">Verified</option>
-            <option value="unverified">Unverified</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="disapproved">Disapproved</option>
             <option value="suspended">Suspended</option>
           </select>
           {(search || roleFilter || statusFilter) && (
@@ -540,15 +563,15 @@ export default function UsersPage() {
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
             {[
               { label: "Show all", value: false },
-              { label: "Verified only", value: true },
+              { label: "Pending only", value: true },
             ].map((option) => (
               <button
                 key={option.label}
                 type="button"
-                onClick={() => handleFilter("status", option.value ? "verified" : "")}
+                onClick={() => handleFilter("status", option.value ? "pending" : "")}
                 className={cx(
                   "rounded-lg px-3.5 py-2 text-sm font-bold transition",
-                  verifiedOnly === option.value
+                  pendingOnly === option.value
                     ? "bg-indigo-600 text-white shadow-sm"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
                 )}
@@ -593,7 +616,7 @@ export default function UsersPage() {
                     : displayedUsers.map((u, i) => {
                         const userHasName = hasName(u);
                         const userIncomplete = !hasStudentRecord(u);
-                        const userMuted = !u.email_verified || userIncomplete;
+                        const userMuted = approvalStatus(u) !== "approved" || userIncomplete;
                         const primaryName = userHasName ? `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() : u.email;
 
                         return (
@@ -634,15 +657,36 @@ export default function UsersPage() {
                             {u.created_at ? new Date(u.created_at).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" }) : "—"}
                           </td>
                           <td className="px-4 py-2.5 text-right">
-                            <ActionMenu
-                              user={u}
-                              onEdit={() => setEditUser(u)}
-                              onSuspend={() => setConfirm({ type: "suspend", user: u })}
-                              onUnsuspend={() => setConfirm({ type: "unsuspend", user: u })}
-                              onVerify={() => setConfirm({ type: "verify", user: u })}
-                              onResetPw={() => setConfirm({ type: "resetpw", user: u })}
-                              onDelete={() => setConfirm({ type: "delete", user: u })}
-                            />
+                            <div className="flex items-center justify-end gap-1.5">
+                              {approvalStatus(u) === "pending" && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirm({ type: "approve", user: u })}
+                                    className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white transition hover:bg-emerald-700"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirm({ type: "disapprove", user: u })}
+                                    className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-bold text-white transition hover:bg-red-700"
+                                  >
+                                    Disapprove
+                                  </button>
+                                </>
+                              )}
+                              <ActionMenu
+                                user={u}
+                                onEdit={() => setEditUser(u)}
+                                onSuspend={() => setConfirm({ type: "suspend", user: u })}
+                                onUnsuspend={() => setConfirm({ type: "unsuspend", user: u })}
+                                onApprove={() => setConfirm({ type: "approve", user: u })}
+                                onDisapprove={() => setConfirm({ type: "disapprove", user: u })}
+                                onResetPw={() => setConfirm({ type: "resetpw", user: u })}
+                                onDelete={() => setConfirm({ type: "delete", user: u })}
+                              />
+                            </div>
                           </td>
                         </tr>
                         );
