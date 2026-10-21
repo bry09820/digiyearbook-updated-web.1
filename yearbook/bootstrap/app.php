@@ -26,6 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->statefulApi();
 
+        // Every response, including the public SPA, so a homepage scan sees the headers.
+        $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
+
         // Override the login redirect so API routes never hit route('login')
         $middleware->redirectUsersTo(function (\Illuminate\Http\Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
@@ -40,7 +43,6 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->api(append: [
             \App\Http\Middleware\CheckMaintenanceMode::class,
-            \App\Http\Middleware\SecurityHeaders::class,
             \App\Http\Middleware\EnsureAccountIsActive::class,
         ]);
 

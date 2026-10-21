@@ -14,7 +14,7 @@ class ContentSecurityMiddleware
         'X-Frame-Options'        => 'SAMEORIGIN',
         'X-Content-Type-Options' => 'nosniff',
         'Referrer-Policy'        => 'strict-origin-when-cross-origin',
-        'Permissions-Policy'     => 'camera=(), microphone=(), geolocation=()',
+        'Permissions-Policy'     => 'geolocation=(), microphone=(), camera=()',
         'X-Content-Owner'        => 'National University Lipa',
         'X-Content-License'      => 'All rights reserved. Unauthorized reproduction prohibited.',
     ];
