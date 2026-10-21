@@ -217,8 +217,9 @@ class BrevoMailService
                 return true;
             }
 
-            // Never leave OTP delivery completely dead during local/mobile testing.
-            if ($mailer !== 'log' && $this->sendViaLaravelMailer($toEmail, $toName, $subject, $htmlContent, $textContent, $context, 'log')) {
+            // Local and testing may record the message in the log when SMTP is down.
+            // Production must report failure so OTP and approval mail are not treated as sent.
+            if ($mailer !== 'log' && app()->environment('local', 'testing') && $this->sendViaLaravelMailer($toEmail, $toName, $subject, $htmlContent, $textContent, $context, 'log')) {
                 Log::warning("Mail ({$context}) fell back to log driver for {$toEmail}");
                 return true;
             }
@@ -262,7 +263,7 @@ class BrevoMailService
                         ->text($textContent);
                 });
 
-            Log::info("Mail ({$context}) sent via [{$mailerName}] to {$toEmail}: {$textContent}");
+            Log::info("Mail ({$context}) sent via [{$mailerName}] to {$toEmail}");
             return true;
         } catch (\Throwable $e) {
             Log::error("Mail ({$context}) via [{$mailerName}] failed: " . $e->getMessage());

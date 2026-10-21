@@ -11,7 +11,9 @@ return [
         'port'       => (int) env('BREVO_PORT', env('MAIL_PORT', 587)),
         'username'   => env('BREVO_USERNAME', env('MAIL_USERNAME')),
         'password'   => env('BREVO_PASSWORD', env('MAIL_PASSWORD')),
-        'encryption' => env('BREVO_ENCRYPTION', 'tls'),
-        'scheme'     => env('BREVO_SCHEME', env('MAIL_SCHEME')),
+        'encryption' => env('BREVO_ENCRYPTION', env('MAIL_ENCRYPTION', 'tls')),
+        'scheme'     => in_array(strtolower(trim((string) env('BREVO_SCHEME', ''))), ['smtp', 'smtps'], true)
+            ? strtolower(trim((string) env('BREVO_SCHEME')))
+            : (in_array(strtolower(trim((string) env('BREVO_ENCRYPTION', env('MAIL_ENCRYPTION', 'tls')))), ['ssl', 'smtps'], true) ? 'smtps' : null),
     ],
 ];

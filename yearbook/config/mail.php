@@ -1,5 +1,25 @@
 <?php
 
+/*
+| Laravel 12 speaks MAIL_SCHEME (smtp / smtps). MAIL_ENCRYPTION is the value
+| set in .env for Gmail (tls) and Hostinger (ssl). Resolve it here so
+| `php artisan config:cache` stores a concrete scheme and never calls env().
+*/
+$resolveMailScheme = static function (string $schemeKey, string $encryptionKey, string $encryptionFallback = 'tls'): ?string {
+    $scheme = strtolower(trim((string) env($schemeKey, '')));
+    if (in_array($scheme, ['smtp', 'smtps'], true)) {
+        return $scheme;
+    }
+
+    $encryption = strtolower(trim((string) env($encryptionKey, $encryptionFallback)));
+
+    // ssl / smtps = implicit TLS (port 465). tls / starttls = STARTTLS (port 587).
+    return in_array($encryption, ['ssl', 'smtps'], true) ? 'smtps' : null;
+};
+
+$mailScheme = $resolveMailScheme('MAIL_SCHEME', 'MAIL_ENCRYPTION');
+$brevoScheme = $resolveMailScheme('BREVO_SCHEME', 'BREVO_ENCRYPTION', (string) env('MAIL_ENCRYPTION', 'tls'));
+
 return [
 
     /*
@@ -16,13 +36,12 @@ return [
     'mailers' => [
 
         /*
-        | Laravel 12 uses MAIL_SCHEME (smtps / null) instead of MAIL_ENCRYPTION.
-        | Port 587 (STARTTLS): MAIL_SCHEME=null (or leave empty)
-        | Port 465 (SSL):       MAIL_SCHEME=smtps
+        | scheme null  + port 587 = STARTTLS  (MAIL_ENCRYPTION=tls)  — Gmail, Brevo
+        | scheme smtps + port 465 = implicit TLS (MAIL_ENCRYPTION=ssl) — Hostinger
         */
         'smtp' => [
             'transport' => 'smtp',
-            'scheme' => env('MAIL_SCHEME'),
+            'scheme' => $mailScheme,
             'url' => env('MAIL_URL'),
             'host' => env('MAIL_HOST', env('BREVO_HOST', '127.0.0.1')),
             'port' => (int) env('MAIL_PORT', env('BREVO_PORT', 587)),
@@ -34,7 +53,7 @@ return [
 
         'brevo' => [
             'transport' => 'smtp',
-            'scheme' => env('BREVO_SCHEME', env('MAIL_SCHEME')),
+            'scheme' => $brevoScheme,
             'host' => env('BREVO_HOST', 'smtp-relay.brevo.com'),
             'port' => (int) env('BREVO_PORT', 587),
             'username' => env('BREVO_USERNAME', env('MAIL_USERNAME')),

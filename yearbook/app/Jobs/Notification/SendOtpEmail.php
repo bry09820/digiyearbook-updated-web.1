@@ -33,9 +33,9 @@ class SendOtpEmail implements ShouldQueue
         $sent = $mailer->sendOtp($this->email, $name, $this->otp);
 
         if (! $sent) {
-            // OTP is already stored in otp_verifications; keep registration usable.
             Log::error("OTP email delivery failed for {$this->email} (attempt {$this->attempts()})");
-            return;
+
+            throw new \RuntimeException("OTP email delivery failed for {$this->email}");
         }
 
         Log::info("OTP email sent successfully to {$this->email}");
